@@ -1,0 +1,13 @@
+langchain
+streamlit
+fastapi
+pinecone
+dotenv
+requests
+uvicorn[standard]
+pydantic
+git
+langchain-huggingface
+tree-sitter
+langgraph
+neo4j

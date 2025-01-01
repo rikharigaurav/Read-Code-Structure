@@ -1,171 +1,228 @@
 import os
 import json
-from pydantic.v1 import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from langchain.prompts import PromptTemplate
+from utils.neodb import App
+from pathlib import Path
+from utils.pinecone import pineconeOperation
 # from langchain.chains import LLMChain
-from langchain.llms import HuggingFaceHub
-from langchain_core.output_parsers import PydanticOutputParser
 from langchain_huggingface import HuggingFaceEndpoint
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_ollama.llms import OllamaLLM
+from memory import process_llm_calls
+from langchain_mistralai.chat_models import ChatMistralAI
 
-# Hugging Face LLM initialization using HuggingFace Hub token
-repo_id = "google/flan-t5-large"
+pineconeOperation = pineconeOperation()
+app = App()
+    
+class FileTypeScheme(BaseModel):
+    file_path: str = Field(description="Path of the file")
+    file_category: str = Field(description="Type of the file")
+    ignore: bool = Field(description="Should ignore this file or not")
 
-llm = HuggingFaceEndpoint(
-    repo_id=repo_id,
-    huggingfacehub_api_token=os.getenv('HUGGINGFACEHUB_API_TOKEN'),
-)
-# prompt_template = "What is the capital of France?"
+    
+class GraphFile(BaseModel):
+    file_type: str = Field(description="Format of the file (e.g., DOT, GraphML, JSON, YAML).")
 
-# def llm_check():
-#     template = PromptTemplate(template="What is the capital of France?", input_variables=[])
-#     chain = LLMChain(llm=llm, prompt=template)
-#     response = chain.run()
-#     print(response)
+class TemplateMarkupFile(BaseModel):
+    file_type: str = Field(description="Template engine or markup language, such as HTML, Handlebars, EJS, or Pug")
+    dependencies: list[str] = Field(description="List of files or assets (images, stylesheets, scripts) linked or imported by the template")
+
+class TestingFile(BaseModel):
+    test_framework: list = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
+    test_reference_dict: dict = Field(
+        description="Dictionary containing key-value pairs of test type and reference function or class name"
+    )
+
+class DocumentationFile(BaseModel):
+    file_type: str = Field(description="Format of the documentation, such as Markdown or reStructuredText")
+    purpose: str = Field(description="The goal of the documentation, such as API documentation, user guide, or design document")
+
+# Dictionary mapping categories to processing functions
+file_category_handlers = {
+    "Source Code Files": "process_source_code_files",  
+    "Testing Files": "process_test_files",        
+    "Template and Markup Files": "process_template_files",          
+    "Code Metadata and Graph Files": "process_metadata_files",  
+    "Documentation Files": "process_documentation_files", 
+}
+
+async def get_file_type(file_path: str, parentID: str):
+    chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+    print(f"file path is {file_path}")
+    parser = PydanticOutputParser(pydantic_object=FileTypeScheme)
+
+    prompt = PromptTemplate(
+        template='''
+        You are tasked with categorizing a file based on its file path and inferred purpose. Follow these steps to determine the appropriate category. If the file does not belong to any predefined categories, mark it as "ignore file."
+
+            Categories
+            Source Code Files
+                Files containing core logic or functionality for the project, written in known or unknown programming languages.
+                Examples: Files used for frontend, backend, or scripting purposes (e.g., .js, .py, .java, etc.).
+
+            Testing Files
+                Files dedicated to writing test cases or validation logic.
+                Examples: Test files for frameworks or libraries, often indicated with terms like test, spec, or feature in the filename.
+
+            Template and Markup Files
+                Files used for templates, rendering views, or designing layouts.
+                Examples: Web templates, email templates, or UI-related files.
+
+            Data Files
+                Files containing structured or static data used in the project.
+                Examples: JSON, YAML, database files, or other serialized data formats.
+
+            Code Metadata and Graph Files
+                Files representing relationships or metadata about the codebase or architecture.
+                Examples: Dependency graphs, flowcharts, or visualizations of the codebase.
+
+            Documentation Files
+                Files providing project documentation, guides, or related information.
+                Examples: Markdown or reStructuredText documentation.
+
+            Instructions for Categorization
+                Input: A query which is the file path.
+                Infer the file's purpose based on its extension, or directory structure.
+                Match the file to one of the categories above.
+                If the file is purely a log, cache, or temporary file with no architectural or logical relevance and doesn't belong to any above category, mark it as "ignore file."
+                Return the output in the specified JSON format.
 
 
-# Pydantic model for structured parsing of file analysis
-class FunctionSummary(BaseModel):
-    functionName: str = Field(...,description="Name of the function")
-    functionSummary: str = Field(..., description="Brief summary of the function")
+            \n{format_instructions}\n{query}\n
+        ''',
+        input_variables=["query"],
+        partial_variables={"format_instructions": parser.get_format_instructions()},
+    )
 
+    # And a query intended to prompt a language model to populate the data structure.
+    prompt_and_model = prompt | chat
 
-class FileAnalysisSchema(BaseModel):
-    fileSummary: str = Field(..., description="Summary of the entire file")
-    functionSummaries: list[FunctionSummary] = Field(..., description="Summaries of functions in the file")
-
-# Read file contents, generate prompt, and analyze the file with LLM
-async def llm_output_for_codebase_files(file_path: str, repo_name: str):
     try:
-        with open(file_path, 'r') as f:
-            file_content = f.read()
+        # Invoke the chain and parse the output
+        output = prompt_and_model.invoke({"query": "pyread.ts"})
+        result = parser.invoke(output)
+        print(result.ignore)
 
-        prompt = f"""
-            You are provided with a code file located at {file_path}. Your task is to thoroughly analyze this file and provide a comprehensive understanding of its contents. This involves both summarizing the file as a whole and analyzing each function it contains to determine its specific role and purpose.
-
-    The steps you need to follow are:
-
-    1. **Input**: The input you are given includes the full file path ({file_path}) and the complete content of the file ({file_content}).
-        - The **filePath** helps identify the location and purpose of the file within a larger codebase (if applicable).
-        - The **fileContent** is the actual code or documentation that needs to be parsed, understood, and summarized.
-    
-    2. **Purpose**: Your task is to analyze the provided code and fulfill the following needs:
-        - **Understand the overall purpose of the file**: What role does this file play in the project? Is it a configuration file, a core logic file, or a utility? Identify its primary purpose.
-        - **Break down and understand each function in detail**: For each function in the file:
-            - Identify the function’s name and signature.
-            - Summarize what the function does in layman's terms. This summary should focus on the function's input, output, and the operations performed within.
-            - If the function interacts with external libraries, APIs, or modules, briefly explain the role of those interactions.
-        - **Identify key elements**: Highlight important classes, variables, constants, or any non-functional code sections (comments, type definitions, etc.) that are essential to understanding the file's behavior.
-
-    3. **Output**: The result of your analysis should include the following:
-        - **File Summary**: Provide a high-level overview of the entire file, explaining its general purpose and the context it fits into within the project.
-        - **Function Summaries**: For each function in the file, include:
-        - The function name.
-        - A brief description of the function's purpose.
-        - Details of the function's inputs (parameters) and outputs (return values).
-        - Key internal logic, including any significant calculations, loops, or conditionals.
-        - Any notable side effects, such as file I/O, database interactions, network requests, or state changes.
-    
-    Example Output:
-    File Summary:
-
-        This file handles user authentication, including validating credentials and managing sessions.
-    Function Summaries:
-
-        Function Name: validateLoginCredentials()
-
-        Function Purpose: Validates a user's login credentials against the database.
-        Inputs:
-            username: string - The user's username.
-            password: string - The user's password.
-        Outputs: Returns a boolean indicating success or failure.
-        Key Internal Logic: Checks the database for matching credentials and returns the result.
-        Notable Side Effects: May log failed attempts to an external logging system.
+        if result.ignore:
+            return 
         
-        Function Name: generateAuthToken()
+        if result.file_category in file_category_handlers:
 
-        Function Purpose: Creates a JWT token for authenticated users.
-        Inputs:
-            userData: User - An object containing user details.
-        Outputs: Returns a string representing the generated token.
-        Key  Internal Logic: Signs the token with a secret key and encodes user information.
-        Notable Side Effects: None. 
-        """
+            handler_function_name = file_category_handlers[result.file_category]
 
-        # Create the prompt template
-        # prompt = PromptTemplate.from_template(prompt_template)
+            handler_function = globals().get(handler_function_name)
 
-        parser = PydanticOutputParser(pydantic_object=FileAnalysisSchema)
-        
-        prompt = PromptTemplate(
-            template="\n{format_instructions}\n{prompt}\n",
-            input_variables=prompt,
-            partial_variables={"format_instructions": parser.get_format_instructions()},
+            if handler_function:
+                get_Test_file_context(result.file_path, )  
+            else:
+                print(f"Handler function '{handler_function_name}' not found.")
+        else:
+            print(f"File category '{result.file_category}' not recognized.")
+            
+
+    except ValidationError as ve:
+        print(f"Validation Error: {ve}")
+        result = {"file_path": file_path, "file_category": "unknown", "ignore": True}
+    except Exception as e:
+        print(f"Unexpected Error: {e}")
+        result = {"file_path": file_path, "file_category": "error", "ignore": True}
+
+    return result
+
+
+async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
+    """
+        file_id: str = Field(description="ID for the file ")
+        file_path: str = Field(description="Path of the testing file")
+        file_ext: str = Field(description="Extention of the file")
+        file_name: str = Field(description="The name of the testing file, often includes test, spec, or feature")
+        test_framework: str = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
+        test_reference_dict: dict = Field(
+            description="Dictionary containing key-value pairs (str: list) of test type and reference function or class name"
         )
+    """
+    file_name = os.path.basename(fullPath)
+    file_extension = Path(fullPath).suffix.lstrip('.')
+    file_id = f"TESTINGFILE: {fullPath} EXT: {file_extension}"
 
-        # Run the chain
-        chain = prompt | llm | parser
-        # prompt_and_model = prompt | llm
-        output = chain.invoke({
-                "prompt": prompt  # Replace with actual prompt text
-            })
-        with open('log.txt', 'w') as log:
-            log.write(
-                f"""
-                File Path: {file_path}
-                    {output}
-                """
-            )
-    
-    except Exception as error:
-        with open('log.txt', 'w') as log:
-            log.write(
-                f"""
-                File Path: {file_path}
-                    {error}
-                """
-            )
-        print(f"Error in analyzing file: {error}")
+    test_framework = []
+    test_reference_dict = {}
 
-# # Example for Meta Files
-async def llm_output_for_meta_files(file_path: str, system_prompt: str, repo_name: str):
-    try:
-        # Step 1: Read the file content
-        with open(file_path, 'r') as f:
-            file_content = f.read()
-
-        # Step 2: Prepare the prompt by combining the system prompt and file content
-        prompt_template = f"""
-        File path: {file_path}\n\n
-        {system_prompt}\n\nFile Content:\n{file_content}
+    prompt = """
+            "Analyze the provided testing file and summarize its key components. Include:
+            The testing framework used (e.g., Jest, Mocha, JUnit, Pytest).
+            The purpose of the tests in the file (e.g., unit tests, integration tests, end-to-end tests).
+            A high-level breakdown of test cases and their objectives.
+            Any conditions being validated, including inputs, expected outputs, and mock data.
+            Use the identified test framework to infer testing style and organize the summary accordingly."
         """
+    
+    summary, test_framework, test_reference_dict = process_llm_calls(fullPath, prompt, test_framework, test_reference_dict)
 
-        # Create the prompt template
-        prompt = PromptTemplate.from_template(prompt_template)
+    # create node for testing file and respective relations
+    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, test_framework, test_reference_dict)
+    app.create_relation(file_id, ParentID, "BELONGS_TO")
 
-        # Create and run the chain
-        chain = prompt | llm 
-        # chain = LLMChain(llm=llm, prompt=prompt)
-        result = chain.invoke({
-            "prompt": prompt
-        })
+    for test_type, references in test_reference_dict.items():
+        for reference in references:
+            # CHECK IF NODE EXISTS (reference node)
+            reference_node = app.get_node_by_id(reference)
+            if(reference_node):
+                #create relation with testing file of that node
+                app.create_relation(file_id, reference, test_type)
+            else:
+                #SAVE THAT NODE IN THE HASH MAP AND RECHECK IT AT LAST
+                pass
+    namespace = pineconeOperation.load_text_to_pinecone(summary, REPONAME)
+    app.update_folder_context(file_id, namespace)
 
-        with open('./log.txt', 'w') as log:
-            log.write(
-                f"""
-                File Path: {file_path}
-                    {result}
-                """
-            )
-        
-        print(f"File Path: {file_path}")
-        print(f"LLM Output: {result}")
+    print("node and relation has been created between test file and relative nodes")
 
-    except Exception as error:
-        print(f"Error processing the file with LLM: {error}")
-        with open('log.txt', 'w') as log:
-            log.write(
-                f"""
-                File Path: {file_path}
-                    {error}
-                """
-            )
+    
+async def get_Markup_file_context(fullPath: str, ParentID: str, REPONAME: str):
+    """
+        file_id: str = Field(description="ID for the file ")
+        file_path: str = Field(description="Path of the testing file")
+        file_ext: str = Field(description="Extention of the file")
+        file_name: str = Field(description="The name of the testing file, often includes test, spec, or feature")
+        test_framework: str = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
+        test_reference_dict: dict = Field(
+            description="Dictionary containing key-value pairs (str: list) of test type and reference function or class name"
+        )
+    """
+    file_name = os.path.basename(fullPath)
+    file_extension = Path(fullPath).suffix.lstrip('.')
+    file_id = f"TESTINGFILE: {fullPath} EXT: {file_extension}"
+
+    test_framework = []
+    test_reference_dict = {}
+
+    prompt = """
+        Analyze the provided $file_type template or markup file. Describe its structure, the primary components (e.g., layouts, partials, or templates), and the list of dependencies it references (e.g., images, stylesheets, or scripts). Highlight any specific features related to the file type, such as templating logic or dynamic bindings.
+        """
+    
+    summary, test_framework, test_reference_dict = process_llm_calls(fullPath, prompt, test_framework, test_reference_dict)
+
+    # create node for testing file and respective relations
+    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, test_framework, test_reference_dict)
+    app.create_relation(file_id, ParentID, "BELONGS_TO")
+
+    for test_type, references in test_reference_dict.items():
+        for reference in references:
+            # CHECK IF NODE EXISTS (reference node)
+            reference_node = app.get_node_by_id(reference)
+            if(reference_node):
+                #create relation with testing file of that node
+                app.create_relation(file_id, reference, test_type)
+            else:
+                #SAVE THAT NODE IN THE HASH MAP AND RECHECK IT AT LAST
+                pass
+    namespace = pineconeOperation.load_text_to_pinecone(summary, REPONAME)
+    app.update_folder_context(file_id, namespace)
+
+    print("node and relation has been created between test file and relative nodes")
+
+
+async 
+

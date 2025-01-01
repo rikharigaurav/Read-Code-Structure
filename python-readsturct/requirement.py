@@ -8,7 +8,6 @@ uvicorn[standard]
 pydantic
 git
 langchain-huggingface
-langchain-community
 tree-sitter
 langgraph
 neo4j

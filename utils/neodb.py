@@ -5,166 +5,379 @@ import json
 import os
 import hashlib
 
-class CodebaseGraph:
-    def __init__(self, uri, user, password):
+class App:
+    def __init__(self):
+        uri = os.getenv("NEO4J_URI")
+        user = os.getenv("NEO4J_USERNAME")
+        password = os.getenv("NEO4J_PASSWORD")
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
 
     def close(self):
-        # Close the driver connection when done
         self.driver.close()
 
-    def clear_database(self):
+    def generate_node_hash(file_path: str, file_name: str) -> str:
+        """
+        Generate a unique hash ID for a node based on the file path and file name.
+
+        Parameters:
+            file_path (str): The path of the file.
+            file_name (str): The name of the file.
+
+        Returns:
+            str: A unique hash ID for the node.
+        """
+        # Combine file path and file name into a single string
+        unique_string = f"{file_path}/{file_name}"
+        
+        # Generate SHA-256 hash
+        hash_object = hashlib.sha256(unique_string.encode('utf-8'))
+        hash_id = hash_object.hexdigest()
+        
+        return hash_id
+
+    def create_data_file_node(self, file_id, file_name, file_path, file_ext, file_type):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(
+                self._create_data_file_node, file_id, file_name, file_path, file_ext, file_type
+            )
+            return result
+
+    @staticmethod
+    def _create_data_file_node(tx, file_id, file_name, file_path, file_ext, file_type):
+        query = (
+            "MERGE (df:DataFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
+            "file_ext: $file_ext, file_type: $file_type }) "
+            "SET df.vector_id = NULL "
+            "RETURN df"
+        )
+        result = tx.run(
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, file_type=file_type
+        )
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["df"]["id"], "node_type": "DataFile"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def create_graph_file_node(self, file_id, file_name, file_path, file_ext, file_type):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(
+                self._create_graph_file_node, file_id, file_name, file_path, file_ext, file_type
+            )
+            return result
+
+    @staticmethod
+    def _create_graph_file_node(tx, file_id, file_name, file_path, file_ext, file_type):
+        query = (
+            "MERGE (gf:GraphFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
+            "file_ext: $file_ext, file_type: $file_type }) "
+            "SET gf.vector_id = NULL "
+            "RETURN gf"
+        )
+        result = tx.run(
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, file_type=file_type
+        )
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["gf"]["id"], "node_type": "GraphFile"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext, file_type, dependencies):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(
+                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext, file_type, dependencies
+            )
+            return result
+
+    @staticmethod
+    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext, file_type, dependencies):
+        query = (
+            "MERGE (tmf:TemplateMarkupFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
+            "file_ext: $file_ext, file_type: $file_type, dependencies: $dependencies }) "
+            "SET tmf.vector_id = NULL "
+            "RETURN tmf"
+        )
+        result = tx.run(
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
+            file_type=file_type, dependencies=dependencies
+        )
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["tmf"]["id"], "node_type": "TemplateMarkupFile"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def create_testing_file_node(self, file_id, file_name, file_path, file_ext, test_framework, test_reference_dict):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(
+                self._create_testing_file_node, file_id, file_name, file_path, file_ext, test_framework, test_reference_dict
+            )
+            return result
+
+    @staticmethod
+    def _create_testing_file_node(tx, file_id, file_name, file_path, file_ext, test_framework, test_reference_dict):
+        query = (
+            "MERGE (tf:TestingFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
+            "file_ext: $file_ext, test_framework: $test_framework, test_reference_dict: $test_reference_dict }) "
+            "SET tf.vector_id = NULL "
+            "RETURN tf"
+        )
+        result = tx.run(
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
+            test_framework=test_framework, test_reference_dict=test_reference_dict
+        )
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["tf"]["id"], "node_type": "TestingFile"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext, file_type, purpose):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(
+                self._create_documentation_file_node, file_id, file_name, file_path, file_ext, file_type, purpose
+            )
+            return result
+
+    @staticmethod
+    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext, file_type, purpose):
+        query = (
+            "MERGE (df:DocumentationFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
+            "file_ext: $file_ext, file_type: $file_type, purpose: $purpose }) "
+            "SET df.vector_id = NULL "
+            "RETURN df"
+        )
+        result = tx.run(
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
+            file_type=file_type, purpose=purpose
+        )
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["df"]["id"], "node_type": "DocumentationFile"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+
+
+    def create_meta_file_node(self, meta_file_id, file_name, file_path, file_type):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(self._create_meta_file_node, meta_file_id, file_name, file_path, file_type)
+            return result
+
+    @staticmethod
+    def _create_meta_file_node(tx, meta_file_id, file_name, file_path, file_type):
+        query = (
+            "MERGE (mf:MetaFile { id: $meta_file_id, file_name: $file_name, file_path: $file_path, file_type: $file_type }) "
+            "SET mf.vector_id = NULL "
+            "RETURN mf"
+        )
+        result = tx.run(query, meta_file_id=meta_file_id, file_name=file_name, file_path=file_path, file_type=file_type)
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["mf"]["id"], "node_type": "MetaFile"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+
+    def create_function_node(self, function_id, function_name, file_path, parameters, return_type):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(self._create_function_node, function_id, function_name, file_path, parameters, return_type)
+            return result
+
+    @staticmethod
+    def _create_function_node(tx, function_id, function_name, file_path, parameters, return_type):
+        query = (
+            "MERGE (f:Function { id: $function_id, function_name: $function_name, file_path: $file_path, "
+            "parameters: $parameters, return_type: $return_type }) "
+            "SET f.vector_id = NULL "
+            "RETURN f"
+        )
+        result = tx.run(query, function_id=function_id, function_name=function_name, file_path=file_path, parameters=parameters, return_type=return_type)
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["f"]["id"], "node_type": "Function"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+
+    # Repeat the same pattern for the remaining node creation methods.
+    # Replace the `MERGE` clause in each query with a `SET <node_label>.vector_id = NULL`.
+
+    def create_folder_node(self, folder_id, folder_name, directory_path):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(self._create_folder_node, folder_id, folder_name, directory_path)
+            return result
+
+    @staticmethod
+    def _create_folder_node(tx, folder_id, folder_name, directory_path):
+        query = (
+            "MERGE (f:Folder { id: $folder_id, folder_name: $folder_name, directory_path: $directory_path }) "
+            "SET f.vector_id = NULL "
+            "RETURN f"
+        )
+        tx.run(query, folder_id=folder_id, folder_name=folder_name, directory_path=directory_path)
+        # try:
+        #     record = result.single()
+        #     if record:
+        #         return {"node_id": record["f"]["id"], "node_type": "Folder"}
+        #     else:
+        #         return None
+        # except Exception as e:
+        #     print(f"Query failed: {e}")
+        #     return None
+
+
+    def create_relation(self, child_id, parent_id, relation):
+        """
+        Creates a directional relationship from the child node to the parent node in Neo4j.
+        
+        Parameters:
+        - child_id (str): The ID of the child node.
+        - parent_id (str): The ID of the parent node.
+        - relation (str): The type of relationship to create (default is "BELONGS_TO").
+        """
+        with self.driver.session(database="neo4j") as session:
+            session.write_transaction(
+                self._create_and_return_relation, child_id, parent_id, relation
+            )
+            # for row in result:
+            #     print(f"Created relationship: {row['child']} -- {relation} --> {row['parent']}")
+        
+    @staticmethod
+    def _create_and_return_relation(tx, child_id, parent_id, relation):
+        """
+        Helper function to execute the Cypher query for creating the relationship.
+        """
+        query = (
+            f"MATCH (child {{id: $child_id}}), (parent {{id: $parent_id}}) "
+            f"MERGE (child)-[r:{relation}]->(parent) "
+            f"RETURN child.id AS child, parent.id AS parent"
+        )
+        
+        tx.run(query, child_id=child_id, parent_id=parent_id)
+
+
+            
+    def get_incoming_nodes(self, node_id):
+        with self.driver.session(database="neo4j") as session:
+            result = session.read_transaction(self._fetch_incoming_nodes, node_id)
+            return result
+
+    @staticmethod
+    def _fetch_incoming_nodes(tx, node_id):
+        query = (
+            "MATCH (source)-[r]->(target {id: $node_id}) "
+            "RETURN source.id AS source_id, labels(source) AS labels"
+        )
+        result = tx.run(query, node_id=node_id)
+        try:
+            return [{"source_id": row["source_id"], "labels": row["labels"]} for row in result]
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return []
+        
+    def get_node_context(self, node_id):
+        with self.driver.session(database="neo4j") as session:
+            result = session.read_transaction(self._fetch_node_context, node_id)
+            return result
+
+    @staticmethod
+    def _fetch_node_context(tx, node_id):
+        query = (
+            "MATCH (n {id: $node_id}) "
+            "RETURN n.context AS context"
+        )
+        result = tx.run(query, node_id=node_id)
+        # try:
+        #     record = result.single()
+        #     return record["context"] if record else None
+        # except Exception as e:
+        #     print(f"Query failed: {e}")
+        #     return None
+
+    def get_node_by_id(self, node_id):
+        with self.driver.session() as session:
+            result = session.read_transaction(self._fetch_node_by_id, node_id)
+            return result
+
+    @staticmethod
+    def _fetch_node_by_id(tx, node_id):
+        query = (
+            "MATCH (n) "
+            "WHERE n.id = $node_id "
+            "RETURN n"
+        )
+        result = tx.run(query, node_id=node_id)
+        try:
+            record = result.single()
+            if record:
+                return record["n"]
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def update_folder_context(self, node_id, vector_format):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(self._update_vector_format, node_id, vector_format)
+            return result
+
+    @staticmethod
+    def _update_vector_format(tx, node_id, vector_format):
+        query = (
+            "MATCH (n {id: $node_id}) "
+            "SET n.vector_format = $vector_format "
+            "RETURN n.id AS node_id, n.vector_format AS updated_vector_format"
+        )
+        result = tx.run(query, node_id=node_id, vector_format=vector_format)
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["node_id"], "updated_vector_format": record["updated_vector_format"]}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def remove_all(self):
         with self.driver.session(database="neo4j") as session:
             session.run("MATCH (n) DETACH DELETE n")
             print("All nodes and edges are removed")
 
-    def set_constraints(self):
-        # Ensure each node has unique identifiers
+        # set the constraint for id
         with self.driver.session(database="neo4j") as session:
-            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (F:Folder) REQUIRE F.id IS UNIQUE")
-            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (f:File) REQUIRE f.id IS UNIQUE")
-            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (fn:Function) REQUIRE fn.id IS UNIQUE")
-            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (cl:Class) REQUIRE cl.id IS UNIQUE")
-            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (api:API) REQUIRE api.id IS UNIQUE")
-            print("Constraints set for unique node identifiers")
-
-    def create_file(self, file_path, file_type):
-        with self.driver.session(database="neo4j") as session:
-            session.write_transaction(
-                self._create_file_node, 
-                file_path, 
-                file_type
-            )
-
-    def create_function(self, function_name, file_path, access_modifier, lines_of_code):
-        with self.driver.session(database="neo4j") as session:
-            session.write_transaction(
-                self._create_function_node, 
-                function_name, 
-                file_path, 
-                access_modifier, 
-                lines_of_code
-            )
-
-    def create_class(self, class_name, file_path):
-        with self.driver.session(database="neo4j") as session:
-            session.write_transaction(
-                self._create_class_node, 
-                class_name, 
-                file_path
-            )
-
-    def create_api(self, method, endpoint):
-        with self.driver.session(database="neo4j") as session:
-            session.write_transaction(
-                self._create_api_node, 
-                method, 
-                endpoint
-            )
-
-    def create_relationship(self, from_node_id, to_node_id, relationship_type):
-        with self.driver.session(database="neo4j") as session:
-            session.write_transaction(
-                self._create_relationship, 
-                from_node_id, 
-                to_node_id, 
-                relationship_type
-            )
-
-    def count_nodes_edges(self):
-        with self.driver.session(database="neo4j") as session:
-            nodes = session.run("MATCH (n) RETURN count(n) as nodes").single()["nodes"]
-            edges = session.run("MATCH ()-[r]->() RETURN count(r) as edges").single()["edges"]
-            print(f"Number of nodes: {nodes}")
-            print(f"Number of edges: {edges}")
-
-    # Static methods for transaction functions
-    @staticmethod
-    def _create_file_node(tx, file_path, file_type):
-        file_id = hashlib.sha256(file_path.encode()).hexdigest()
-        query = (
-            "MERGE (f:File { id: $file_id }) "
-            "SET f.path = $file_path, f.type = $file_type "
-            "RETURN f"
-        )
-        tx.run(query, file_id=file_id, file_path=file_path, file_type=file_type)
-
-    @staticmethod
-    def _create_function_node(tx, function_name, file_path, access_modifier, lines_of_code):
-        function_id = hashlib.sha256(f"{function_name}:{file_path}".encode()).hexdigest()
-        query = (
-            "MERGE (fn:Function { id: $function_id }) "
-            "SET fn.name = $function_name, fn.file_path = $file_path, "
-            "fn.access_modifier = $access_modifier, fn.lines_of_code = $lines_of_code "
-            "RETURN fn"
-        )
-        tx.run(query, function_id=function_id, function_name=function_name, file_path=file_path,
-               access_modifier=access_modifier, lines_of_code=lines_of_code)
-
-    @staticmethod
-    def _create_class_node(tx, class_name, file_path):
-        class_id = hashlib.sha256(f"{class_name}:{file_path}".encode()).hexdigest()
-        query = (
-            "MERGE (cl:Class { id: $class_id }) "
-            "SET cl.name = $class_name, cl.file_path = $file_path "
-            "RETURN cl"
-        )
-        tx.run(query, class_id=class_id, class_name=class_name, file_path=file_path)
-
-    @staticmethod
-    def _create_api_node(tx, method, endpoint):
-        api_id = hashlib.sha256(f"{method}:{endpoint}".encode()).hexdigest()
-        query = (
-            "MERGE (api:API { id: $api_id }) "
-            "SET api.method = $method, api.endpoint = $endpoint "
-            "RETURN api"
-        )
-        tx.run(query, api_id=api_id, method=method, endpoint=endpoint)
-
-    @staticmethod
-    def _create_relationship(tx, from_node_id, to_node_id, relationship_type):
-        query = (
-            "MATCH (a { id: $from_node_id }), (b { id: $to_node_id }) "
-            "MERGE (a)-[r:{relationship_type}]->(b) "
-            "RETURN type(r)"
-        )
-        tx.run(query, from_node_id=from_node_id, to_node_id=to_node_id, relationship_type=relationship_type.upper())
+            session.run("CREATE CONSTRAINT unique_profile_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE")
+            print("Constraint is set")
 
 
-if __name__ == "__main__":
-    # Load environment variables
-    uri = os.getenv('NEO4J_URI')
-    user = "neo4j"
-    password = os.getenv("NEO4J_PASSWORD")
-    
-    # Initialize the app
-    app = CodebaseGraph(uri, user, password)
-    
-    # Clear existing nodes and relationships
-    app.clear_database()
-    app.set_constraints()
-    
-    # Load sample data
-    with open('sample.json') as f:
-        data = json.load(f)
-    
-    # Create nodes and relationships based on the data
-    for file_data in data['files']:
-        app.create_file(file_data['path'], file_data['type'])
-    
-    for function_data in data['functions']:
-        app.create_function(function_data['name'], function_data['file_path'], function_data['access_modifier'], function_data['lines_of_code'])
-    
-    for class_data in data['classes']:
-        app.create_class(class_data['name'], class_data['file_path'])
-
-    for api_data in data['apis']:
-        app.create_api(api_data['method'], api_data['endpoint'])
-    
-    # Create relationships based on the data
-    for edge_data in data['edges']:
-        app.create_relationship(edge_data['source'], edge_data['target'], edge_data['relationship'])
-    
-    # Display the final counts
-    app.count_nodes_edges()
-    app.close()

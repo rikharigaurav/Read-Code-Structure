@@ -7,7 +7,7 @@ from pathlib import Path
 from utils.pinecone import pineconeOperation
 # from langchain.chains import LLMChain
 from langchain_huggingface import HuggingFaceEndpoint
-from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser, JsonOutputParser
 from langchain_ollama.llms import OllamaLLM
 from memory import process_llm_calls
 from langchain_mistralai.chat_models import ChatMistralAI
@@ -19,24 +19,6 @@ class FileTypeScheme(BaseModel):
     file_path: str = Field(description="Path of the file")
     file_category: str = Field(description="Type of the file")
     ignore: bool = Field(description="Should ignore this file or not")
-
-    
-class GraphFile(BaseModel):
-    file_type: str = Field(description="Format of the file (e.g., DOT, GraphML, JSON, YAML).")
-
-class TemplateMarkupFile(BaseModel):
-    file_type: str = Field(description="Template engine or markup language, such as HTML, Handlebars, EJS, or Pug")
-    dependencies: list[str] = Field(description="List of files or assets (images, stylesheets, scripts) linked or imported by the template")
-
-class TestingFile(BaseModel):
-    test_framework: list = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
-    test_reference_dict: dict = Field(
-        description="Dictionary containing key-value pairs of test type and reference function or class name"
-    )
-
-class DocumentationFile(BaseModel):
-    file_type: str = Field(description="Format of the documentation, such as Markdown or reStructuredText")
-    purpose: str = Field(description="The goal of the documentation, such as API documentation, user guide, or design document")
 
 # Dictionary mapping categories to processing functions
 file_category_handlers = {
@@ -158,7 +140,7 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
             Use the identified test framework to infer testing style and organize the summary accordingly."
         """
     
-    summary, test_framework, test_reference_dict = process_llm_calls(fullPath, prompt, test_framework, test_reference_dict)
+    summary, TestingFile = process_llm_calls(fullPath, prompt, test_framework, test_reference_dict)
 
     # create node for testing file and respective relations
     app.create_testing_file_node(file_id, file_name, fullPath, file_extension, test_framework, test_reference_dict)
@@ -178,51 +160,3 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
     app.update_folder_context(file_id, namespace)
 
     print("node and relation has been created between test file and relative nodes")
-
-    
-async def get_Markup_file_context(fullPath: str, ParentID: str, REPONAME: str):
-    """
-        file_id: str = Field(description="ID for the file ")
-        file_path: str = Field(description="Path of the testing file")
-        file_ext: str = Field(description="Extention of the file")
-        file_name: str = Field(description="The name of the testing file, often includes test, spec, or feature")
-        test_framework: str = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
-        test_reference_dict: dict = Field(
-            description="Dictionary containing key-value pairs (str: list) of test type and reference function or class name"
-        )
-    """
-    file_name = os.path.basename(fullPath)
-    file_extension = Path(fullPath).suffix.lstrip('.')
-    file_id = f"TESTINGFILE: {fullPath} EXT: {file_extension}"
-
-    test_framework = []
-    test_reference_dict = {}
-
-    prompt = """
-        Analyze the provided $file_type template or markup file. Describe its structure, the primary components (e.g., layouts, partials, or templates), and the list of dependencies it references (e.g., images, stylesheets, or scripts). Highlight any specific features related to the file type, such as templating logic or dynamic bindings.
-        """
-    
-    summary, test_framework, test_reference_dict = process_llm_calls(fullPath, prompt, test_framework, test_reference_dict)
-
-    # create node for testing file and respective relations
-    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, test_framework, test_reference_dict)
-    app.create_relation(file_id, ParentID, "BELONGS_TO")
-
-    for test_type, references in test_reference_dict.items():
-        for reference in references:
-            # CHECK IF NODE EXISTS (reference node)
-            reference_node = app.get_node_by_id(reference)
-            if(reference_node):
-                #create relation with testing file of that node
-                app.create_relation(file_id, reference, test_type)
-            else:
-                #SAVE THAT NODE IN THE HASH MAP AND RECHECK IT AT LAST
-                pass
-    namespace = pineconeOperation.load_text_to_pinecone(summary, REPONAME)
-    app.update_folder_context(file_id, namespace)
-
-    print("node and relation has been created between test file and relative nodes")
-
-
-async 
-

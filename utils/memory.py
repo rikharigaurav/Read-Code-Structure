@@ -2,7 +2,25 @@ from langchain.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI, ChatMistralAI
 from langchain.prompts import ChatPromptTemplate
 from transformers import AutoTokenizer
+from pydantic import BaseModel, Field
 import os
+
+class GraphFile(BaseModel):
+    file_type: str = Field(description="Format of the file (e.g., DOT, GraphML, JSON, YAML).")
+
+class TemplateMarkupFile(BaseModel):
+    file_type: str = Field(description="Template engine or markup language, such as HTML, Handlebars, EJS, or Pug")
+    dependencies: list[str] = Field(description="List of files or assets (images, stylesheets, scripts) linked or imported by the template")
+
+class TestingFile(BaseModel):
+    test_framework: list = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
+    test_reference_dict: dict = Field(
+        description="Dictionary containing key-value pairs of test type and reference function or class name"
+    )
+
+class DocumentationFile(BaseModel):
+    file_type: str = Field(description="Format of the documentation, such as Markdown or reStructuredText")
+    purpose: str = Field(description="The goal of the documentation, such as API documentation, user guide, or design document")
 
 # llm = ChatOpenAI(model="gpt-4", temperature=0)
 llm = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
@@ -59,7 +77,7 @@ def process_fragment(fragment, current_index, total_fragments, prompt, memory):
     }
 
 # Example of processing multiple fragments
-def process_file_in_chunks(file_content, prompt):
+def process_file_in_chunks(file_content, prompt, fileSchema):
     max_tokens = 4000
     """
     Splits the file into fragments and processes each fragment iteratively.
@@ -91,17 +109,17 @@ def process_file_in_chunks(file_content, prompt):
 
     results = []
     for current_index, fragment in enumerate(fragments):
-        result = process_fragment(fragment, current_index, total_fragments, prompt, memory)
+        result = process_fragment(fragment, current_index, total_fragments, prompt, memory, fileSchema)
         results.append(result)
 
     return results
 
 
-def process_llm_calls(file_path, prompt):
+def process_llm_calls(file_path, prompt, fileSchema):
     with open(file_path, 'r', encoding='utf-8') as file:
             content = file.read()
 
-    results = process_file_in_chunks(content, prompt)
+    results = process_file_in_chunks(content, prompt, fileSchema)
     summary = ""
     # Output results
     for idx, result in enumerate(results):
@@ -112,4 +130,4 @@ def process_llm_calls(file_path, prompt):
         # print("\n---\n")
 
     namespace = "kaf"
-    return summary, test_framework, test_reference_dict
+    return results

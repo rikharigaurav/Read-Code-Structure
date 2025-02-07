@@ -47,7 +47,7 @@ class App:
         query = (
             "MERGE (df:DataFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext, file_type: $file_type }) "
-            "SET df.vector_id = NULL "
+            "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
             "RETURN df"
         )
         result = tx.run(
@@ -75,7 +75,7 @@ class App:
         query = (
             "MERGE (gf:GraphFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext, file_type: $file_type }) "
-            "SET gf.vector_id = NULL "
+            "SET gf.vector_id = NULL, gf.summary = '' "  # Added empty summary
             "RETURN gf"
         )
         result = tx.run(
@@ -103,7 +103,7 @@ class App:
         query = (
             "MERGE (tmf:TemplateMarkupFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext, file_type: $file_type, dependencies: $dependencies }) "
-            "SET tmf.vector_id = NULL "
+            "SET tmf.vector_id = NULL, tmf.summary = '' "  # Added empty summary
             "RETURN tmf"
         )
         result = tx.run(
@@ -132,7 +132,7 @@ class App:
         query = (
             "MERGE (tf:TestingFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext, test_framework: $test_framework, test_reference_dict: $test_reference_dict }) "
-            "SET tf.vector_id = NULL "
+            "SET tf.vector_id = NULL, tf.summary = '' "  # Added empty summary
             "RETURN tf"
         )
         result = tx.run(
@@ -161,7 +161,7 @@ class App:
         query = (
             "MERGE (df:DocumentationFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext, file_type: $file_type, purpose: $purpose }) "
-            "SET df.vector_id = NULL "
+            "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
             "RETURN df"
         )
         result = tx.run(
@@ -178,8 +178,6 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-
-
     def create_meta_file_node(self, meta_file_id, file_name, file_path, file_type):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(self._create_meta_file_node, meta_file_id, file_name, file_path, file_type)
@@ -189,7 +187,7 @@ class App:
     def _create_meta_file_node(tx, meta_file_id, file_name, file_path, file_type):
         query = (
             "MERGE (mf:MetaFile { id: $meta_file_id, file_name: $file_name, file_path: $file_path, file_type: $file_type }) "
-            "SET mf.vector_id = NULL "
+            "SET mf.vector_id = NULL, mf.summary = '' "  # Added empty summary
             "RETURN mf"
         )
         result = tx.run(query, meta_file_id=meta_file_id, file_name=file_name, file_path=file_path, file_type=file_type)
@@ -203,7 +201,6 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-
     def create_function_node(self, function_id, function_name, file_path, parameters, return_type):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(self._create_function_node, function_id, function_name, file_path, parameters, return_type)
@@ -214,7 +211,7 @@ class App:
         query = (
             "MERGE (f:Function { id: $function_id, function_name: $function_name, file_path: $file_path, "
             "parameters: $parameters, return_type: $return_type }) "
-            "SET f.vector_id = NULL "
+            "SET f.vector_id = NULL, f.summary = '' "  # Added empty summary
             "RETURN f"
         )
         result = tx.run(query, function_id=function_id, function_name=function_name, file_path=file_path, parameters=parameters, return_type=return_type)
@@ -228,10 +225,6 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-
-    # Repeat the same pattern for the remaining node creation methods.
-    # Replace the `MERGE` clause in each query with a `SET <node_label>.vector_id = NULL`.
-
     def create_folder_node(self, folder_id, folder_name, directory_path):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(self._create_folder_node, folder_id, folder_name, directory_path)
@@ -241,20 +234,19 @@ class App:
     def _create_folder_node(tx, folder_id, folder_name, directory_path):
         query = (
             "MERGE (f:Folder { id: $folder_id, folder_name: $folder_name, directory_path: $directory_path }) "
-            "SET f.vector_id = NULL "
+            "SET f.vector_id = NULL, f.summary = '' "  # Added empty summary
             "RETURN f"
         )
-        tx.run(query, folder_id=folder_id, folder_name=folder_name, directory_path=directory_path)
-        # try:
-        #     record = result.single()
-        #     if record:
-        #         return {"node_id": record["f"]["id"], "node_type": "Folder"}
-        #     else:
-        #         return None
-        # except Exception as e:
-        #     print(f"Query failed: {e}")
-        #     return None
-
+        result = tx.run(query, folder_id=folder_id, folder_name=folder_name, directory_path=directory_path)
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["f"]["id"], "node_type": "Folder"}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
 
     def create_relation(self, child_id, parent_id, relation):
         """
@@ -269,8 +261,6 @@ class App:
             session.write_transaction(
                 self._create_and_return_relation, child_id, parent_id, relation
             )
-            # for row in result:
-            #     print(f"Created relationship: {row['child']} -- {relation} --> {row['parent']}")
         
     @staticmethod
     def _create_and_return_relation(tx, child_id, parent_id, relation):
@@ -370,6 +360,30 @@ class App:
             print(f"Query failed: {e}")
             return None
 
+    def update_summary_context(self, node_id, summary_context):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(self._update_summary_context, node_id, summary_context)
+            return result
+
+    @staticmethod
+    def _update_summary_context(tx, node_id, summary_context):
+        query = (
+            "MATCH (n {id: $node_id}) "
+            "SET n.summary_context = $summary_context "
+            "RETURN n.id AS node_id, n.summary_context AS updated_summary_context"
+        )
+        result = tx.run(query, node_id=node_id, summary_context=summary_context)
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["node_id"], "updated_summary_context": record["updated_summary_context"]}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+
     def remove_all(self):
         with self.driver.session(database="neo4j") as session:
             session.run("MATCH (n) DETACH DELETE n")
@@ -379,5 +393,6 @@ class App:
         with self.driver.session(database="neo4j") as session:
             session.run("CREATE CONSTRAINT unique_profile_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE")
             print("Constraint is set")
+
 
 

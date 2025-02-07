@@ -7,7 +7,7 @@ from pathlib import Path
 from utils.pinecone import pineconeOperation
 # from langchain.chains import LLMChain
 from langchain_huggingface import HuggingFaceEndpoint
-from langchain_core.output_parsers import PydanticOutputParser, JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser
 from langchain_ollama.llms import OllamaLLM
 from memory import process_llm_calls
 from langchain_mistralai.chat_models import ChatMistralAI
@@ -20,6 +20,15 @@ class FileTypeScheme(BaseModel):
     file_category: str = Field(description="Type of the file")
     ignore: bool = Field(description="Should ignore this file or not")
 
+    '''
+        left node dictionary : {
+            "Parent fileID" : {
+                    "Children FileID : "",
+                    "relation" : ""
+                }
+        }
+    '''
+
 # Dictionary mapping categories to processing functions
 file_category_handlers = {
     "Source Code Files": "process_source_code_files",  
@@ -29,10 +38,10 @@ file_category_handlers = {
     "Documentation Files": "process_documentation_files", 
 }
 
-async def get_file_type(file_path: str, parentID: str):
-    chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+async def get_file_type(file_path: str, parentID: str, repoName: str, left_nodes : dict):
     print(f"file path is {file_path}")
-    parser = PydanticOutputParser(pydantic_object=FileTypeScheme)
+    parser = JsonOutputParser(pydantic_object=FileTypeScheme)
 
     prompt = PromptTemplate(
         template='''
@@ -47,17 +56,11 @@ async def get_file_type(file_path: str, parentID: str):
                 Files dedicated to writing test cases or validation logic.
                 Examples: Test files for frameworks or libraries, often indicated with terms like test, spec, or feature in the filename.
 
+            
+
             Template and Markup Files
                 Files used for templates, rendering views, or designing layouts.
                 Examples: Web templates, email templates, or UI-related files.
-
-            Data Files
-                Files containing structured or static data used in the project.
-                Examples: JSON, YAML, database files, or other serialized data formats.
-
-            Code Metadata and Graph Files
-                Files representing relationships or metadata about the codebase or architecture.
-                Examples: Dependency graphs, flowcharts, or visualizations of the codebase.
 
             Documentation Files
                 Files providing project documentation, guides, or related information.
@@ -90,13 +93,19 @@ async def get_file_type(file_path: str, parentID: str):
             return 
         
         if result.file_category in file_category_handlers:
-
             handler_function_name = file_category_handlers[result.file_category]
-
             handler_function = globals().get(handler_function_name)
 
             if handler_function:
-                get_Test_file_context(result.file_path, )  
+                try:
+                    handler_function(
+                        result.file_path, 
+                        parentID,         
+                        repoName,
+                        left_nodes
+                    )
+                except Exception as e:
+                    print(f"Error executing {handler_function_name}: {str(e)}")
             else:
                 print(f"Handler function '{handler_function_name}' not found.")
         else:
@@ -113,7 +122,7 @@ async def get_file_type(file_path: str, parentID: str):
     return result
 
 
-async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
+async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str, left_nodes : dict):
     """
         file_id: str = Field(description="ID for the file ")
         file_path: str = Field(description="Path of the testing file")
@@ -128,8 +137,6 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
     file_extension = Path(fullPath).suffix.lstrip('.')
     file_id = f"TESTINGFILE: {fullPath} EXT: {file_extension}"
 
-    test_framework = []
-    test_reference_dict = {}
 
     prompt = """
             "Analyze the provided testing file and summarize its key components. Include:
@@ -140,11 +147,13 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
             Use the identified test framework to infer testing style and organize the summary accordingly."
         """
     
-    summary, TestingFile = process_llm_calls(fullPath, prompt, test_framework, test_reference_dict)
+    output = process_llm_calls(fullPath, prompt, 'TestingFile')
 
     # create node for testing file and respective relations
-    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, test_framework, test_reference_dict)
+    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, output['prop']['test_framework'], output['prop']['test_reference_dict'], output['prop']['summary'])
     app.create_relation(file_id, ParentID, "BELONGS_TO")
+
+    test_reference_dict: dict = output['prop']['test_reference_dict']
 
     for test_type, references in test_reference_dict.items():
         for reference in references:
@@ -155,8 +164,9 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str):
                 app.create_relation(file_id, reference, test_type)
             else:
                 #SAVE THAT NODE IN THE HASH MAP AND RECHECK IT AT LAST
-                pass
-    namespace = pineconeOperation.load_text_to_pinecone(summary, REPONAME)
+                left_nodes['']
+    namespace = pineconeOperation.load_text_to_pinecone(output['result'], REPONAME)
+    app.update_summary_context(file_id, output['prop']['summary'])
     app.update_folder_context(file_id, namespace)
 
     print("node and relation has been created between test file and relative nodes")

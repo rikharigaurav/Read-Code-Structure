@@ -1,4 +1,5 @@
 from typing_extensions import TypedDict
+from utils.neodb import App
 import os
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -8,18 +9,23 @@ from langchain_core.output_parsers import JsonOutputParser
 from typing import Optional, List, Dict, Any, Literal
 from langgraph.graph import StateGraph
 from langchain.prompts import PromptTemplate
+from utils.pinecone import pineconeOperation
+from langchain_neo4j import GraphCypherQAChain, Neo4jGraph
+from langchain_openai import ChatOpenAI
 
 class LangGraphState(TypedDict):
     original_query: str 
-    subqueries: list[str]
-    decomposed_queries: list[dict]
-    aggregated_data: list[dict]
-    final_result: str
+    subqueries: List[str]
+    decomposed_queries: List[Dict[str, Any]]
+    aggregated_data: List[Dict[str, Any]]
+    final_result: Optional[str]
 
+pc = pineconeOperation()
 
 graph_builder = StateGraph(LangGraphState)
 
 llm = ChatMistralAI(os.getenv('MISTRAL_API_KEY'))
+
 
 workflow = StateGraph(LangGraphState)
 
@@ -35,7 +41,7 @@ class QueryDecomposition(BaseModel):
         description="Nature of the query: semantic (meaning), structural (relationships), or both",
         example="structural"
     )
-    scope: dict = Field(
+    scope: dict[str, str] = Field(
         description="Target focus with type and specifics",
         example={
             "type": "class|function|endpoint|file",
@@ -68,13 +74,25 @@ class Decomposer(BaseModel):
         if len(posts) > 100:
             raise ValueError("Too many posts. The maximum allowed is 100.")
         return values   
+    
+class context_output_structure(BaseModel):
+    sub_query_output : str = Field(description="The final output for the selective sub query")
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_output(cls, values: Dict) -> Dict:
+        output = values.get("sub_query_output", "")
+        if len(output) > 500:
+            raise ValueError("Output exceeds 500 character limit")
+        if output.count(".") > 4:
+            raise ValueError("Maximum 4 sentences allowed")
+        return values
 
 
 def create_subqueries(state):
     """
     Classify the intent of the query based on predefined categories.
     """
-    original_query = state["original_query"]
 
     prompt = '''
         You are an expert assistant designed to analyze and process queries about large software codebases. Your task is to break down a given query into smaller, actionable sub-queries, each focusing on a specific task or aspect of the codebase. Ensure the sub-queries are:
@@ -107,20 +125,15 @@ def create_subqueries(state):
     
     chain = prompt_and_parser | llm | parser
 
-    output = chain.invoke({"query": original_query})
-    print(output)
-    state["subqueries"] = output.dict()
-    print(output.dict())
-    
-    return {"subqueries": output.dict()}
+    result = chain.invoke({"query": state["original_query"]})
+    print(result)
+    return {"subqueries": result.subqueries}
 
 
 def decompose_query(state):
     """
     Break down the normalized query into manageable subtasks for further processing.
     """
-
-    subqueries = state['subqueries']
 
     prompt = '''
         You are an expert assistant for analyzing codebases. Your task is to decompose a given sub-query into structured parts.  
@@ -145,8 +158,7 @@ def decompose_query(state):
     '''
 
     parser = JsonOutputParser(pydantic_object = Decomposer)
-    vectorSearch = []
-    graphSearch = []
+    
 
     prompt_and_parser = PromptTemplate(
         template = prompt,
@@ -154,19 +166,67 @@ def decompose_query(state):
         partial_variables = {'format_instructions': parser.get_format_instructions()}
     )
 
-    chain = prompt_and_parser | llm | parser
-
-    output = chain.invoke({"sub_query": subqueries})
-
-    for prop in output:
-        pass
-
-
-    return {"subqueries": subqueries}
+    decomposed = []
+    for subq in state["subqueries"]:
+        chain = prompt_and_parser | llm | parser
+        result = chain.invoke({"sub_query": subq})
+        decomposed.extend([q.dict() for q in result.queries])
+    
+    return {"decomposed_queries": decomposed}
 
 def vectorCalls(state):
+    results = []
+    for query in state["decomposed_queries"]:
+        if query["search_type"] in ("vector", "hybrid"):
+            # CREATE CONTEXT TO RETRIEVE DATA FROM PINECONE
+            context = ":"
+            restrived_Data = pc.retrieve_data_from_pincone(context)
+            parser = JsonOutputParser(pydantic_object=context_output_structure)
+            PromptTemplate = PromptTemplate(
+                template = "",
+                input_variables = ['subquery','context'],
+                partial_variables = {"format_instruction" : parser.get_format_instruction()}
+            )
+
+            prompt_model = PromptTemplate | llm | parser
+            output = prompt_model.invoke({
+                "subquery": query['subquery'],
+                "context": context
+            })
+
+            print(output)
+
+            # add this output to aggregated state
+
+    # add a return statement
+
+            
+def graphCalls(state):
     decomposer = state['decomposed_queries']
 
     for DQ in decompose_query:
-        if(DQ['search_type'] == 'vector' or DQ['search_type'] == 'hybrid'):
-            
+        if(DQ['search_type'] == 'graph' or DQ['search_type'] == 'hybrid'):
+
+            graph = Neo4jGraph(url=os.getenv("NEO4J_URI"), username="neo4j", password=os.getenv("NEO4J_PASSWORD"))
+
+            chain = GraphCypherQAChain.from_llm(
+                llm=llm,
+                graph=graph,
+                verbose=True,
+                validate_cypher=True,
+                allow_dangerous_requests=True,
+            )
+
+            context = chain.invoke({"query": DQ['subquery']})
+
+
+
+def aggregate_result(state):
+    return 1
+
+
+
+
+
+
+

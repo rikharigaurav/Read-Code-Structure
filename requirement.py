@@ -12,3 +12,7 @@ langchain-community
 tree-sitter
 langgraph
 neo4j
+langchain-pinecone 
+pinecone-notebooks
+langchain_neo4j
+langgraph-checkpoint-sqlite

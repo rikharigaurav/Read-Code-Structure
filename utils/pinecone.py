@@ -4,15 +4,18 @@ from langchain.embeddings import CohereEmbeddings
 from hashlib import md5
 from pinecone import Pinecone, ServerlessSpec
 import os
-
+from langchain_pinecone import PineconeVectorStore
+    
 class pineconeOperation:
-    def __init__(self):
+    def __init__(self, index):
         self.pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
         self.embeddings = CohereEmbeddings(
                 api_key=os.getenv("COHERE_API_KEY"),
                 batch_size=48
-        )       
+        )      
+
+        self.index_name = index
 
     async def get_embeddings(self, text: str):
         try:
@@ -69,10 +72,10 @@ class pineconeOperation:
             raise error
 
     # Load text data to Pinecone and return the namespace name
-    def load_text_to_pinecone(self, content, index_name):
-        if not self.pc.has_index(index_name):
+    def load_text_to_pinecone(self, content):
+        if not self.pc.has_index(self.index_name):
             self.pc.create_index(
-                name=index_name,
+                name=self.index_name,
                 dimension=3072,
                 metric="cosine",
                 spec=ServerlessSpec(
@@ -99,5 +102,17 @@ class pineconeOperation:
         except Exception as error:
             print("Error in load_text_to_pinecone:", error)
             raise error
+
+
+    def retrieve_data_from_pincone(self, context):
+        vector_store = PineconeVectorStore(index=self.ndex_name, embedding=self.embeddings)
+
+        retriever = vector_store.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={"k": 1, "score_threshold": 0.5},
+        )
+        result = retriever.invoke(context)
+
+        return result
 
 

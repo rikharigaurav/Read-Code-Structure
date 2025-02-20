@@ -35,18 +35,18 @@ class App:
         
         return hash_id
 
-    def create_data_file_node(self, file_id, file_name, file_path, file_ext, file_type):
+    def create_data_file_node(self, file_id, file_name, file_path, file_ext):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_data_file_node, file_id, file_name, file_path, file_ext, file_type
+                self._create_data_file_node, file_id, file_name, file_path, file_ext
             )
             return result
 
     @staticmethod
-    def _create_data_file_node(tx, file_id, file_name, file_path, file_ext, file_type):
+    def _create_data_file_node(tx, file_id, file_name, file_path, file_ext):
         query = (
             "MERGE (df:DataFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, file_type: $file_type }) "
+            "file_ext: $file_ext, }) "
             "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
             "RETURN df"
         )
@@ -63,33 +63,33 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_graph_file_node(self, file_id, file_name, file_path, file_ext, file_type):
-        with self.driver.session(database="neo4j") as session:
-            result = session.write_transaction(
-                self._create_graph_file_node, file_id, file_name, file_path, file_ext, file_type
-            )
-            return result
+    # def create_graph_file_node(self, file_id, file_name, file_path, file_ext, file_type):
+    #     with self.driver.session(database="neo4j") as session:
+    #         result = session.write_transaction(
+    #             self._create_graph_file_node, file_id, file_name, file_path, file_ext, file_type
+    #         )
+    #         return result
 
-    @staticmethod
-    def _create_graph_file_node(tx, file_id, file_name, file_path, file_ext, file_type):
-        query = (
-            "MERGE (gf:GraphFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, file_type: $file_type }) "
-            "SET gf.vector_id = NULL, gf.summary = '' "  # Added empty summary
-            "RETURN gf"
-        )
-        result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, file_type=file_type
-        )
-        try:
-            record = result.single()
-            if record:
-                return {"node_id": record["gf"]["id"], "node_type": "GraphFile"}
-            else:
-                return None
-        except Exception as e:
-            print(f"Query failed: {e}")
-            return None
+    # @staticmethod
+    # def _create_graph_file_node(tx, file_id, file_name, file_path, file_ext, file_type):
+    #     query = (
+    #         "MERGE (gf:GraphFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
+    #         "file_ext: $file_ext, file_type: $file_type }) "
+    #         "SET gf.vector_id = NULL, gf.summary = '' "  # Added empty summary
+    #         "RETURN gf"
+    #     )
+    #     result = tx.run(
+    #         query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, file_type=file_type
+    #     )
+    #     try:
+    #         record = result.single()
+    #         if record:
+    #             return {"node_id": record["gf"]["id"], "node_type": "GraphFile"}
+    #         else:
+    #             return None
+    #     except Exception as e:
+    #         print(f"Query failed: {e}")
+    #         return None
 
     def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext, file_type, dependencies):
         with self.driver.session(database="neo4j") as session:
@@ -177,24 +177,25 @@ class App:
         except Exception as e:
             print(f"Query failed: {e}")
             return None
+        
 
-    def create_meta_file_node(self, meta_file_id, file_name, file_path, file_type):
+    def create_api_endpoint_node(self, nodeID, url, http_method):
         with self.driver.session(database="neo4j") as session:
-            result = session.write_transaction(self._create_meta_file_node, meta_file_id, file_name, file_path, file_type)
+            result = session.write_transaction(self._create_api_endpoint_node, nodeID, url, http_method)
             return result
 
     @staticmethod
-    def _create_meta_file_node(tx, meta_file_id, file_name, file_path, file_type):
+    def _create_api_endpoint_node(tx, nodeID, url, http_method):
         query = (
-            "MERGE (mf:MetaFile { id: $meta_file_id, file_name: $file_name, file_path: $file_path, file_type: $file_type }) "
-            "SET mf.vector_id = NULL, mf.summary = '' "  # Added empty summary
-            "RETURN mf"
+            "MERGE (ae:APIEndpoint { id: $nodeID, endpoint: $url, http_method: $http_method }) "
+            "SET ae.vector_id = NULL "
+            "RETURN ae"
         )
-        result = tx.run(query, meta_file_id=meta_file_id, file_name=file_name, file_path=file_path, file_type=file_type)
+        result = tx.run(query, nodeID=nodeID, url=url, http_method=http_method)
         try:
             record = result.single()
             if record:
-                return {"node_id": record["mf"]["id"], "node_type": "MetaFile"}
+                return {"node_id": record["ae"]["id"], "node_type": "APIEndpoint"}
             else:
                 return None
         except Exception as e:
@@ -248,7 +249,7 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_relation(self, child_id, parent_id, relation):
+    def create_relation(self, child_id, parent_id, relation="BELONGS_TO"):
         """
         Creates a directional relationship from the child node to the parent node in Neo4j.
         

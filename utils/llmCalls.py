@@ -5,42 +5,49 @@ from langchain.prompts import PromptTemplate
 from utils.neodb import App
 from pathlib import Path
 from utils.pinecone import pineconeOperation
-# from langchain.chains import LLMChain
-from langchain_huggingface import HuggingFaceEndpoint
+from utils.treeSitter import get_imports
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_ollama.llms import OllamaLLM
 from memory import process_llm_calls
 from langchain_mistralai.chat_models import ChatMistralAI
+from typing import Union, List
+from utils.langgraph import pending_rels
+from utils.treeSitter import relative_path
+
 
 pineconeOperation = pineconeOperation()
 app = App()
     
 class FileTypeScheme(BaseModel):
-    file_path: str = Field(description="Path of the file")
-    file_category: str = Field(description="Type of the file")
-    ignore: bool = Field(description="Should ignore this file or not")
+    Source_Code_Files: Union[str, List[str]] = Field(
+        description="Files that contain source code"
+    )
+    Testing_Files: Union[str, List[str]] = Field(
+        description="Files that contain testing code"
+    )
+    Template_Files: Union[str, List[str]] = Field(
+        description="Files that contain templates and markups"
+    )
+    Doc_Files: Union[str, List[str]] = Field(
+        description="Files that contain documentation"
+    )
+    ignore: Union[str, List[str]] = Field(
+        description="Files to ignore"
+    )
 
-    '''
-        left node dictionary : {
-            "Parent fileID" : {
-                    "Children FileID : "",
-                    "relation" : ""
-                }
-        }
-    '''
-
-# Dictionary mapping categories to processing functions
 file_category_handlers = {
     "Source Code Files": "process_source_code_files",  
     "Testing Files": "process_test_files",        
-    "Template and Markup Files": "process_template_files",          
-    "Code Metadata and Graph Files": "process_metadata_files",  
+    "Template and Markup Files": "process_template_files",         
     "Documentation Files": "process_documentation_files", 
 }
 
 chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
-async def get_file_type(file_path: str, parentID: str, repoName: str, left_nodes : dict):
-    print(f"file path is {file_path}")
+
+async def get_file_type(file_path_list: list[str], parentID: str, repoName: str):
+    '''
+        list of files will be provided and this llm call will decide to seperate the files into categories
+    '''
+    print(f"file path is {file_path_list}")
     parser = JsonOutputParser(pydantic_object=FileTypeScheme)
 
     prompt = PromptTemplate(
@@ -56,7 +63,6 @@ async def get_file_type(file_path: str, parentID: str, repoName: str, left_nodes
                 Files dedicated to writing test cases or validation logic.
                 Examples: Test files for frameworks or libraries, often indicated with terms like test, spec, or feature in the filename.
 
-            
 
             Template and Markup Files
                 Files used for templates, rendering views, or designing layouts.
@@ -84,45 +90,53 @@ async def get_file_type(file_path: str, parentID: str, repoName: str, left_nodes
     prompt_and_model = prompt | chat
 
     try:
-        # Invoke the chain and parse the output
-        output = prompt_and_model.invoke({"query": "pyread.ts"})
+        # Invoke the LLM and parse the result
+        output = prompt_and_model.invoke({"query": file_path_list})
         result = parser.invoke(output)
-        print(result.ignore)
 
-        if result.ignore:
-            return 
+        # Mapping from our model's field names to the category names used in the handler mapping.
+        field_to_category = {
+            "Source_Code_Files": "Source Code Files",
+            "Testing_Files": "Testing Files",
+            "Template_Files": "Template and Markup Files",
+            "Doc_Files": "Documentation Files",
+        }
+
+        # Loop through each category field and call its associated handler function.
+        for field, category in field_to_category.items():
+            files = getattr(result, field, None)
+            if files:
+                if isinstance(files, str):
+                    files = [files]
+                handler_function_name = file_category_handlers.get(category)
+                handler_function = globals().get(handler_function_name)
+                if handler_function:
+                    for filePath in files:
+                        try:
+                            handler_function(filePath, parentID, repoName)
+                        except Exception as e:
+                            print(f"Error executing {handler_function_name} for file '{filePath}': {str(e)}")
+                else:
+                    print(f"No handler function found for category '{category}'.")
         
-        if result.file_category in file_category_handlers:
-            handler_function_name = file_category_handlers[result.file_category]
-            handler_function = globals().get(handler_function_name)
-
-            if handler_function:
-                try:
-                    handler_function(
-                        result.file_path, 
-                        parentID,         
-                        repoName,
-                        left_nodes
-                    )
-                except Exception as e:
-                    print(f"Error executing {handler_function_name}: {str(e)}")
+        # Optionally handle files that should be ignored.
+        if result.ignore:
+            if isinstance(result.ignore, str):
+                ignore_files = [result.ignore]
             else:
-                print(f"Handler function '{handler_function_name}' not found.")
-        else:
-            print(f"File category '{result.file_category}' not recognized.")
-            
+                ignore_files = result.ignore
+            print(f"Ignoring files: {ignore_files}")
 
     except ValidationError as ve:
         print(f"Validation Error: {ve}")
-        result = {"file_path": file_path, "file_category": "unknown", "ignore": True}
+        result = {"file_path": file_path_list, "file_category": "unknown", "ignore": True}
     except Exception as e:
         print(f"Unexpected Error: {e}")
-        result = {"file_path": file_path, "file_category": "error", "ignore": True}
+        result = {"file_path": file_path_list, "file_category": "error", "ignore": True}
 
     return result
 
-
-async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str, left_nodes : dict):
+async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
     """
         file_id: str = Field(description="ID for the file ")
         file_path: str = Field(description="Path of the testing file")
@@ -133,11 +147,10 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str, lef
             description="Dictionary containing key-value pairs (str: list) of test type and reference function or class name"
         )
     """
+
     file_name = os.path.basename(fullPath)
     file_extension = Path(fullPath).suffix.lstrip('.')
-    file_id = f"TESTINGFILE: {fullPath} EXT: {file_extension}"
-
-
+    file_id = f"TESTINGFILE:{fullPath}:{file_extension}"
     prompt = """
             "Analyze the provided testing file and summarize its key components. Include:
             The testing framework used (e.g., Jest, Mocha, JUnit, Pytest).
@@ -147,26 +160,53 @@ async def get_Test_file_context(fullPath: str, ParentID: str, REPONAME: str, lef
             Use the identified test framework to infer testing style and organize the summary accordingly."
         """
     
-    output = process_llm_calls(fullPath, prompt, 'TestingFile')
+    # output = process_llm_calls(fullPath, prompt, 'TestingFile')
+    code = None
+    with open(fullPath, 'r') as f:
+        code = f.read()
+
+    test_reference_dict = get_imports(code)
 
     # create node for testing file and respective relations
-    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, output['prop']['test_framework'], output['prop']['test_reference_dict'], output['prop']['summary'])
+    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, 'pytest', test_reference_dict, "summary")
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
-    test_reference_dict: dict = output['prop']['test_reference_dict']
 
-    for test_type, references in test_reference_dict.items():
-        for reference in references:
-            # CHECK IF NODE EXISTS (reference node)
-            reference_node = app.get_node_by_id(reference)
-            if(reference_node):
-                #create relation with testing file of that node
-                app.create_relation(file_id, reference, test_type)
-            else:
-                #SAVE THAT NODE IN THE HASH MAP AND RECHECK IT AT LAST
-                left_nodes['']
-    namespace = pineconeOperation.load_text_to_pinecone(output['result'], REPONAME)
-    app.update_summary_context(file_id, output['prop']['summary'])
-    app.update_folder_context(file_id, namespace)
+    for test_function, function_file_path in test_reference_dict.items():
+        rel_path = relative_path.get_relative_path(function_file_path)
+        if isinstance(test_function, tuple):
+            if(test_function[0]):
+                references_ID = f"FUNCTION:{rel_path}:{test_function[0]}"
+                pending_rels.add_relationship(file_id, references_ID, 'TESTS')
+        else:
+            if test_function :
+                references_ID = f"FUNCTION:{rel_path}:{test_function}"
+                pending_rels.add_relationship(file_id, references_ID, 'TESTS')
+
+    # namespace = pineconeOperation.load_text_to_pinecone(output['result'], REPONAME)
+    # app.update_summary_context(file_id, output['prop']['summary'])
+    # app.update_folder_context(file_id, namespace)
 
     print("node and relation has been created between test file and relative nodes")
+
+
+def process_source_code_files(file_path: str, ParentID: str, reponame: str):
+    file_id = f"SOURCECODEFILE:{file_path}:{file_extension}"
+    file_name = os.path.basename(file_path)
+    file_extension = Path(file_path).suffix.lstrip('.')
+    prompt = """
+            "Analyze the provided testing file and summarize its key components. Include:
+            The testing framework used (e.g., Jest, Mocha, JUnit, Pytest).
+            The purpose of the tests in the file (e.g., unit tests, integration tests, end-to-end tests).
+            A high-level breakdown of test cases and their objectives.
+            Any conditions being validated, including inputs, expected outputs, and mock data.
+            Use the identified test framework to infer testing style and organize the summary accordingly."
+        """
+    #connected file to its coresponding folder 
+    app.create_data_file_node(file_id, file_id, file_name, file_path, file_extension)
+    app.create_relation(file_id, ParentID, "BELONGS_TO")
+
+    # output = process_llm_calls(file_path, prompt, 'SourceCodeFile')
+
+    
+    

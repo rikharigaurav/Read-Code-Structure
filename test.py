@@ -11,107 +11,71 @@ PY_LANGUAGE = Language(tspython.language())
 parser = Parser(PY_LANGUAGE)
 # parser.set_language(PY_LANGUAGE)
 
-code = '''from tree_sitter import Language, Parser
-import tree_sitter_python
-
-# Load Python language
-PY_LANGUAGE = Language(tree_sitter_python.language())
-
-# Create a parser configured for Python
-parser = Parser(PY_LANGUAGE)
-
-def parse_python_code(source_code: str) -> tuple:
-    """
-    Parse Python source code and return the syntax tree with important nodes.
+def traverse_tree(node, source_code, depth=0, parent_class=None):
+    """Recursively traverse the syntax tree and extract structural information"""
+    structural_info = []
+    indent = '    ' * depth
     
-    Args:
-        source_code: Python source code as a string
+    # Handle class definitions
+    if node.type == 'class_definition':
+        class_name = get_node_text(node.child_by_field_name('name'), source_code)
+        structural_info.append(f"{indent}class {class_name} {{")
+        for child in node.children:
+            structural_info.extend(traverse_tree(child, source_code, depth+1, class_name))
+        structural_info.append(f"{indent}}}")
+    
+    # Handle function definitions
+    elif node.type == 'function_definition':
+        func_name = get_node_text(node.child_by_field_name('name'), source_code)
+        class_prefix = f"{parent_class}." if parent_class else ""
+        structural_info.append(f"{indent}function {class_prefix}{func_name} {{")
         
-    Returns:
-        tuple: (tree, root_node, function_defs, class_defs, calls)
-    """
-    # Convert source code to UTF-8 bytes
-    code_bytes = source_code.encode('utf-8')
+        # Find function calls within the function body
+        calls = find_function_calls(node, source_code)
+        for call in calls:
+            structural_info.append(f"{indent}    calls {call}")
+        
+        structural_info.append(f"{indent}}}")
     
-    # Parse the code
-    tree = parser.parse(code_bytes)
+    # Recursively process child nodes
+    else:
+        for child in node.children:
+            structural_info.extend(traverse_tree(child, source_code, depth, parent_class))
+    
+    return structural_info
+
+def get_node_text(node, source_code):
+    """Get the text of a node from the source code"""
+    return source_code[node.start_byte:node.end_byte].decode('utf8')
+
+def find_function_calls(node, source_code):
+    """Find function calls within a node"""
+    calls = []
+    if node.type == 'call':
+        # Get the function name being called
+        func_node = node.child_by_field_name('function')
+        if func_node:
+            calls.append(get_node_text(func_node, source_code))
+    
+    # Recursively check children for calls
+    for child in node.children:
+        calls.extend(find_function_calls(child, source_code))
+    
+    return calls
+
+def generate_code_map(file_path):
+    """Generate a structural map for a Python file"""
+    with open(file_path, 'rb') as f:
+        source_code = f.read()
+    
+    tree = parser.parse(source_code)
     root_node = tree.root_node
     
-    # Initialize collections
-    function_defs = []
-    class_defs = []
-    calls = []
-    
-    # Recursive walk through nodes
-    def walk(node):
-        if node.type == 'function_definition':
-            name_node = node.child_by_field_name('name')
-            function_defs.append({
-                'name': name_node.text.decode(),
-                'start_line': name_node.start_point[0]+1,
-                'end_line': node.end_point[0]+1
-            })
-        elif node.type == 'class_definition':
-            name_node = node.child_by_field_name('name')
-            class_defs.append({
-                'name': name_node.text.decode(),
-                'start_line': name_node.start_point[0]+1,
-                'end_line': node.end_point[0]+1
-            })
-        elif node.type == 'call':
-            function_node = node.child_by_field_name('function')
-            calls.append({
-                'name': function_node.text.decode(),
-                'line': function_node.start_point[0]+1
-            })
-            
-        for child in node.children:
-            walk(child)
-    
-    walk(root_node)
-    
-    return tree, root_node, function_defs, class_defs, calls'''
+    structure = traverse_tree(root_node, source_code)
+    return '\n'.join(structure)
 
-def extract_import_nodes(code):
-    """
-    Parse the given source (as bytes) and return a list of nodes
-    corresponding to import statements (both "import_statement" and
-    "import_from_statement").
-    """
-    # code = code.encode("utf-8")
-    tree = parser.parse(code)
-    root = tree.root_node
-    import_nodes = []
-
-    def traverse(node):
-        if node.type in ["import_statement", "import_from_statement"]:
-            import_nodes.append(node)
-        # Recursively traverse children.
-        for child in node.children:
-            traverse(child)
-
-    traverse(root)
-    return import_nodes
-
-def process_file(file_path):
-    """
-    Process a single file, extracting and printing any import statements.
-    """
-    try:
-        with open(file_path, "rb") as f:
-            source = f.read()
-    except Exception as e:
-        print(f"Error reading {file_path}: {e}")
-        return
-
-    import_nodes = extract_import_nodes(source)
-    if import_nodes:
-        # print(f"\nFile: {file_path}")
-        for node in import_nodes:
-            # Extract the source code for the node.
-            import_statement = source[node.start_byte:node.end_byte].decode("utf8")
-            print("  ", import_statement.strip())
-
-
-
-process_file('test.py')
+if __name__ == "__main__":
+    # Example usage
+    file_path = 'test.py'
+    code_map = generate_code_map(file_path)
+    print(code_map)

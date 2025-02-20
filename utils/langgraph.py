@@ -8,6 +8,33 @@ from utils.neodb import App
 app = App()  
 app.remove_all()
 
+class PendingRelationships:
+    def __init__(self):
+        self.pending_relationships = []
+
+    def add_relationship(self, parent_id, child_id, relation):
+        """
+        Add a pending relationship to the list.
+
+        :param parent_id: The ID of the parent node.
+        :param child_id: The ID of the child node.
+        :param reaction: The type of relationship (e.g., "calls", "uses").
+        """
+        relationship = {
+            "parent_id": parent_id,
+            "child_id": child_id,
+            "reaction": relation
+        }
+        self.pending_relationships.append(relationship)
+
+    def get_pending_relationships(self):
+        return self.pending_relationships
+
+    def clear_relationships(self):
+        self.pending_relationships = []
+
+pending_rels = PendingRelationships()
+
 async def getFilesContext(startPath: str, reponame: str):
     print(f"The repo name is {reponame}")
     ignored_files = []  # List to hold files that caused errors
@@ -74,7 +101,7 @@ async def getFilesContext(startPath: str, reponame: str):
                 # List all files and directories in the current directory
                 filesAndDirs = os.listdir(currentDir)
                 print(filesAndDirs)
-                
+                fullPathList: list[str] = []
                 # Reverse to ensure files and subdirectories are processed in correct order
                 for fileOrDir in reversed(filesAndDirs):
                     fullPath = os.path.join(currentDir, fileOrDir)
@@ -92,15 +119,10 @@ async def getFilesContext(startPath: str, reponame: str):
                         print(f"created node {children_node_id}")
                     else:
                         # Process files immediately
-                        baseName = os.path.basename(fullPath)
-                        file_extension = Path(fullPath).suffix.lstrip('.')
-                        children_node_id = f"FILE: {fullPath} EXT: {file_extension}"
-                        print(children_node_id)
-                        await get_file_type(fullPath, parent_node_id)
-                        app.create_file_node(children_node_id, baseName, fullPath, file_extension)
-                        app.create_folder_relation(children_node_id, parent_node_id, "BELONGS_TO")
+                        fullPathList.append(fullPath)
 
-                        print(f"created node {children_node_id}")
+                print(fullPathList)
+                await get_file_type(fullPathList, parent_node_id, reponame)
 
             except Exception as e:
                 # Log the error if there’s an issue accessing the directory and add it to ignored files

@@ -13,9 +13,28 @@ from utils.treeSitter import process_file
 chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
 # Define state structure
 
-class GraphFile(BaseModel):
+# class GraphFile(BaseModel):
+#     summary: str = Field(description = "Summary of the current node")
+#     file_type: str = Field(description="Format of the file (e.g., DOT, GraphML, JSON, YAML).")
+
+class SourceCodeFile(BaseModel):
     summary: str = Field(description = "Summary of the current node")
-    file_type: str = Field(description="Format of the file (e.g., DOT, GraphML, JSON, YAML).")
+
+class CLASS(BaseModel): 
+    functionCalls: list = Field(description=" contains all the function calls inside this class ")
+    apiCalls: list = Field(description="contains all the API ROUTE calls inside this class")
+
+class Function(BaseModel):
+    arguments: list[dict] = Field(description="list all the arg name and their type")
+    functionCalls: list = Field(description=" contains all the function calls inside this class ")
+    apiCalls: list = Field(description="contains all the API ROUTE calls inside this class")
+    returnType: str = Field(description="Return type of this function")
+
+class ApiEndpoint(BaseModel):
+    routeURL: str = Field(description="Route Url of this endpoint")
+    method: str = Field(description="Http method of this endpoint")
+    functionCalls: list = Field(description=" contains all the function calls inside this class ")
+    apiCalls: list = Field(description="contains all the API ROUTE calls inside this class")
 
 class TemplateMarkupFile(BaseModel):
     summary: str = Field(description = "Summary of the current node")

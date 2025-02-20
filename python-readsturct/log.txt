@@ -1,3 +1,0 @@
-File Path: ./octokit.js\.git\logs\refs\remotes\origin\HEAD
-    type object 'FileAnalysisSchema' has no attribute 'model_json_schema'
-                

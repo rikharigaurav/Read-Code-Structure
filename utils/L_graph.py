@@ -3,9 +3,7 @@ from utils.llmCalls import get_file_type
 from utils.pending_rela import pending_rels
 from pathlib import Path
 
-from utils.neodb import App
-app = App()  
-
+from utils.neodb import app
 
 async def getFilesContext(startPath: str, reponame: str):
     pending_rels.clear_relationships()

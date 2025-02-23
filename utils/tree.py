@@ -8,11 +8,11 @@ from typing import List, Tuple
 from pathlib import Path
 from dataclasses import dataclass
 import os
-from utils.neodb import App
+from utils.neodb import app
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 
-app = App()
+
 load_dotenv()
 
 @dataclass

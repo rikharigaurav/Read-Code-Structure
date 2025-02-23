@@ -411,4 +411,4 @@ class App:
             print("Constraint is set")
 
 
-
+app = App()

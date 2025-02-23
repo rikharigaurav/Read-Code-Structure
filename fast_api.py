@@ -18,8 +18,8 @@ async def repo(Body: data):
     if(repoUrl):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
-        # fullPath = await clone_repository(repoUrl, "./")
-        fullPath = 'Read-Code-Structure'
+        fullPath = await clone_repository(repoUrl, "./")
+        # fullPath = 'Read-Code-Structure'
         # print("Full system path for repo", fullPath)
         # Create a pinecone index
         if(fullPath):

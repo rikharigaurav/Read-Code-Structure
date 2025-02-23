@@ -1,5 +1,4 @@
 from typing_extensions import TypedDict
-from utils.neodb import App
 import os
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field, ValidationError, model_validator

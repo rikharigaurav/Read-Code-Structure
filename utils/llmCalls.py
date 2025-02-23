@@ -2,7 +2,7 @@ import os
 import json
 from pydantic import BaseModel, Field, ValidationError
 from langchain.prompts import PromptTemplate
-from utils.neodb import App
+from utils.neodb import app
 from pathlib import Path
 # from utils.pinecone_db import pineconeOperation
 from langchain_core.output_parsers import JsonOutputParser
@@ -11,9 +11,6 @@ from typing import Union, List
 from utils.pending_rela import pending_rels
 from utils.tree import relative_path, read_and_parse, get_imports
 
-
-
-app = App()
     
 class FileTypeScheme(BaseModel):
     Source_Code_Files: Union[str, List[str]] = Field(

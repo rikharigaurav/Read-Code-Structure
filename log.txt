@@ -1,3 +1,42 @@
 File Path: ./octokit.js\.git\logs\refs\remotes\origin\HEAD
     type object 'FileAnalysisSchema' has no attribute 'model_json_schema'
                 
+
+if function_node and function_node.type == "attribute":
+                    method_name_node = function_node.child_by_field_name("attribute")
+                    object_name_node = function_node.child_by_field_name("object")
+                    if method_name_node and object_name_node:
+                        # Decode node texts
+                        method_name = method_name_node.text.decode("utf8")
+                        object_name = object_name_node.text.decode("utf8")
+                        
+                        if object_name == "requests" and method_name in {"get", "post", "put", "delete", "patch"}:
+                            print(f"{'  ' * current_level}🎯 Found method call: {object_name}.{method_name}")
+                            argument_node = node.child_by_field_name("arguments")
+                            if argument_node and argument_node.child_count > 0:
+                                route = None
+                                print("Inspecting argument node children:")
+                                for child in argument_node.children:
+                                    print("Child type:", child.type, "Text:", child.text.decode("utf8"))
+                                    if child.type in {"string", "string_literal", "string_content"}:
+                                        # Handle compound string nodes
+                                        if child.child_count > 0:
+                                            route = "".join(c.text.decode("utf8") for c in child.children)
+                                        else:
+                                            route = child.text.decode("utf8")
+                                        break
+                                if route is not None:
+                                    route = route.strip("\"'")
+                                    # Extract only the path from the URL
+                                    parsed_url = urlparse(route)
+                                    if parsed_url.path:
+                                        route = parsed_url.path
+                                    print("Extracted route:", route)
+                                else:
+                                    print("No literal route found for API call")
+
+                                target_id = f"APIENDPOINT:{route}:{method_name.upper()}"
+                                                                
+                                if target_id and parent_id:
+                                    print(f"Detected API Call - method: {method_name.upper()}, route: {route}")
+                                    pending_rels.add_relationship(parent_id, target_id, method_name.upper())

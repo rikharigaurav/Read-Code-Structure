@@ -4,16 +4,19 @@ from neo4j.exceptions import ServiceUnavailable
 import json
 import os
 import hashlib
+from dotenv import load_dotenv
 
+load_dotenv()
 class App:
-    def __init__(self):
-        uri = os.getenv("NEO4J_URI")
+    def __init__(self, uri=None, user=None, password=None):
         user = os.getenv("NEO4J_USERNAME")
         password = os.getenv("NEO4J_PASSWORD")
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        URI = os.getenv("NEO4J_URI")
+        AUTH = (user, password)
 
-    def close(self):
-        self.driver.close()
+        with GraphDatabase.driver(URI, auth=AUTH) as self.driver:
+            self.driver.verify_connectivity()
+            print("connected succesfully")
 
     def generate_node_hash(file_path: str, file_name: str) -> str:
         """
@@ -46,12 +49,12 @@ class App:
     def _create_data_file_node(tx, file_id, file_name, file_path, file_ext):
         query = (
             "MERGE (df:DataFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, }) "
+            "file_ext: $file_ext}) "
             "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
             "RETURN df"
         )
         result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, file_type=file_type
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext
         )
         try:
             record = result.single()
@@ -202,20 +205,34 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_function_node(self, function_id, function_name, file_path, parameters, return_type):
+    def create_function_node(self, function_id, function_name, file_path, return_type=""):
         with self.driver.session(database="neo4j") as session:
-            result = session.write_transaction(self._create_function_node, function_id, function_name, file_path, parameters, return_type)
+            result = session.write_transaction(
+                self._create_function_node, 
+                function_id, 
+                function_name, 
+                file_path, 
+                return_type
+            )
             return result
 
     @staticmethod
-    def _create_function_node(tx, function_id, function_name, file_path, parameters, return_type):
+    def _create_function_node(tx, function_id, function_name, file_path, return_type):
+        
         query = (
-            "MERGE (f:Function { id: $function_id, function_name: $function_name, file_path: $file_path, "
-            "parameters: $parameters, return_type: $return_type }) "
-            "SET f.vector_id = NULL, f.summary = '' "  # Added empty summary
+            "MERGE (f:Function { id: $function_id }) "
+            "SET f.function_name = $function_name, "
+            "f.file_path = $file_path, "
+            "f.return_type = $return_type "
             "RETURN f"
         )
-        result = tx.run(query, function_id=function_id, function_name=function_name, file_path=file_path, parameters=parameters, return_type=return_type)
+        result = tx.run(
+            query,
+            function_id=function_id,
+            function_name=function_name,
+            file_path=file_path,
+            return_type=str(return_type)  # Ensure string type
+        )
         try:
             record = result.single()
             if record:
@@ -225,6 +242,7 @@ class App:
         except Exception as e:
             print(f"Query failed: {e}")
             return None
+
 
     def create_folder_node(self, folder_id, folder_name, directory_path):
         with self.driver.session(database="neo4j") as session:
@@ -318,25 +336,22 @@ class App:
     def get_node_by_id(self, node_id):
         with self.driver.session() as session:
             result = session.read_transaction(self._fetch_node_by_id, node_id)
-            return result
+            return bool(result)  
 
     @staticmethod
     def _fetch_node_by_id(tx, node_id):
         query = (
             "MATCH (n) "
             "WHERE n.id = $node_id "
-            "RETURN n"
+            "RETURN n IS NOT NULL AS node_exists"
         )
-        result = tx.run(query, node_id=node_id)
         try:
+            result = tx.run(query, node_id=node_id)
             record = result.single()
-            if record:
-                return record["n"]
-            else:
-                return None
+            return record["node_exists"] if record else False
         except Exception as e:
             print(f"Query failed: {e}")
-            return None
+            return False
 
     def update_folder_context(self, node_id, vector_format):
         with self.driver.session(database="neo4j") as session:

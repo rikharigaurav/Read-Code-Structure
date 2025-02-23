@@ -1,41 +1,15 @@
 import os
 from utils.llmCalls import get_file_type
-from utils.Fileparser import setFileParser
-import asyncio
+from utils.pending_rela import pending_rels
 from pathlib import Path
 
 from utils.neodb import App
 app = App()  
-app.remove_all()
 
-class PendingRelationships:
-    def __init__(self):
-        self.pending_relationships = []
-
-    def add_relationship(self, parent_id, child_id, relation):
-        """
-        Add a pending relationship to the list.
-
-        :param parent_id: The ID of the parent node.
-        :param child_id: The ID of the child node.
-        :param reaction: The type of relationship (e.g., "calls", "uses").
-        """
-        relationship = {
-            "parent_id": parent_id,
-            "child_id": child_id,
-            "reaction": relation
-        }
-        self.pending_relationships.append(relationship)
-
-    def get_pending_relationships(self):
-        return self.pending_relationships
-
-    def clear_relationships(self):
-        self.pending_relationships = []
-
-pending_rels = PendingRelationships()
 
 async def getFilesContext(startPath: str, reponame: str):
+    pending_rels.clear_relationships()
+    app.remove_all()
     print(f"The repo name is {reponame}")
     ignored_files = []  # List to hold files that caused errors
     stack = [(startPath, False)]  # Initialize stack with start path, False indicates it’s not fully processed
@@ -106,14 +80,13 @@ async def getFilesContext(startPath: str, reponame: str):
                 for fileOrDir in reversed(filesAndDirs):
                     fullPath = os.path.join(currentDir, fileOrDir)
                     
-                    if os.path.isdir(fullPath):
-                        # Push directories onto the stack to process after their children
+                    if os.path.isdir(fullPath) and not fileOrDir.startswith("."):
                         children_node_id = f"FOLDER: {fullPath}"
                         print(children_node_id)
                         stack.append((fullPath, False))
                         app.create_folder_node(children_node_id, os.path.basename(fullPath), fullPath)
                         print("node created")
-                        app.create_folder_relation(children_node_id, parent_node_id, "BELONGS_TO")
+                        app.create_relation(children_node_id, parent_node_id, "BELONGS_TO")
                         print("relation created")
 
                         print(f"created node {children_node_id}")
@@ -130,6 +103,7 @@ async def getFilesContext(startPath: str, reponame: str):
                 ignored_files.append(currentDir)
                 print(ignored_files)
 
+    pending_rels.create_all_relationships()
         # else: 
             # If the current directory is not a directory, it must be a file
 

@@ -2,9 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
-# from utils.readStruct import getFilesContext
-from utils.Fileparser import setFileParser
-from utils.langgraph import getFilesContext
+from utils.L_graph import getFilesContext
 # from utils.llmCalls import llm_check
 
 app = FastAPI()
@@ -21,7 +19,7 @@ async def repo(Body: data):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
         # fullPath = await clone_repository(repoUrl, "./")
-        fullPath = 'python-readsturct'
+        fullPath = 'Read-Code-Structure'
         # print("Full system path for repo", fullPath)
         # Create a pinecone index
         if(fullPath):

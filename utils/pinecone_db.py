@@ -1,6 +1,6 @@
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 # from langchain.vectorstores import Pinecone
-from langchain.embeddings import CohereEmbeddings
+from langchain_community.embeddings import CohereEmbeddings
 from hashlib import md5
 from pinecone import Pinecone, ServerlessSpec
 import os

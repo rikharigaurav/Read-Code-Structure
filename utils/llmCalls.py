@@ -1,20 +1,18 @@
 import os
 import json
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError
 from langchain.prompts import PromptTemplate
 from utils.neodb import App
 from pathlib import Path
-from utils.pinecone import pineconeOperation
-from utils.treeSitter import get_imports
+# from utils.pinecone_db import pineconeOperation
 from langchain_core.output_parsers import JsonOutputParser
-from memory import process_llm_calls
 from langchain_mistralai.chat_models import ChatMistralAI
 from typing import Union, List
-from utils.langgraph import pending_rels
-from utils.treeSitter import relative_path
+from utils.pending_rela import pending_rels
+from utils.tree import relative_path, read_and_parse, get_imports
 
 
-pineconeOperation = pineconeOperation()
+
 app = App()
     
 class FileTypeScheme(BaseModel):
@@ -47,6 +45,7 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
     '''
         list of files will be provided and this llm call will decide to seperate the files into categories
     '''
+    repoName = repoName
     print(f"file path is {file_path_list}")
     parser = JsonOutputParser(pydantic_object=FileTypeScheme)
 
@@ -79,7 +78,7 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
                 If the file is purely a log, cache, or temporary file with no architectural or logical relevance and doesn't belong to any above category, mark it as "ignore file."
                 Return the output in the specified JSON format.
 
-
+            "Please return a valid JSON object with the following keys: Source_Code_Files, Testing_Files, Template_Files, Doc_Files, and ignore. Each key should map to either a string or a list of strings representing file paths. Do not include any extra text, explanations, or formatting outside of the JSON object."
             \n{format_instructions}\n{query}\n
         ''',
         input_variables=["query"],
@@ -93,6 +92,7 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
         # Invoke the LLM and parse the result
         output = prompt_and_model.invoke({"query": file_path_list})
         result = parser.invoke(output)
+        print(result)
 
         # Mapping from our model's field names to the category names used in the handler mapping.
         field_to_category = {
@@ -103,21 +103,44 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
         }
 
         # Loop through each category field and call its associated handler function.
+        # Debugging: Print type of result
+        print("jasdfhjdh")
+        print(f"Type of result: {type(result)}")
+
+        # Check if result is a dictionary and print available keys
+        if isinstance(result, dict):
+            print(f"Keys in result: {list(result.keys())}")
+        else:
+            print(f"Attributes in result: {dir(result)}")  # If it's an object, list attributes
+
+        # Loop through each category field and call its associated handler function.
         for field, category in field_to_category.items():
-            files = getattr(result, field, None)
-            if files:
-                if isinstance(files, str):
-                    files = [files]
-                handler_function_name = file_category_handlers.get(category)
-                handler_function = globals().get(handler_function_name)
-                if handler_function:
-                    for filePath in files:
-                        try:
-                            handler_function(filePath, parentID, repoName)
-                        except Exception as e:
-                            print(f"Error executing {handler_function_name} for file '{filePath}': {str(e)}")
-                else:
-                    print(f"No handler function found for category '{category}'.")
+            files = result.get(field, []) if isinstance(result, dict) else getattr(result, field, [])
+
+            if not files:
+                print(f"No files found for category: {category}. Skipping processing.")
+                continue
+
+            if not isinstance(files, list):  
+                files = [files]
+
+            handler_function_name = file_category_handlers.get(category)
+
+            # Debugging: Print handler function name
+            print(f"Processing category: {category}, Handler function: {handler_function_name}")
+
+            handler_function = globals().get(handler_function_name)
+
+            if handler_function:
+                for filePath in files:
+                    try:
+                        await handler_function(filePath, parentID, repoName)
+                    except Exception as e:
+                        print(f"Error executing {handler_function_name} for file '{filePath}': {str(e)}")
+            else:
+                print(f"No handler function found for category '{category}'.")
+
+
         
         # Optionally handle files that should be ignored.
         if result.ignore:
@@ -134,7 +157,7 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
         print(f"Unexpected Error: {e}")
         result = {"file_path": file_path_list, "file_category": "error", "ignore": True}
 
-    return result
+    return 1
 
 async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
     """
@@ -168,7 +191,7 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
     test_reference_dict = get_imports(code)
 
     # create node for testing file and respective relations
-    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, 'pytest', test_reference_dict, "summary")
+    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, 'pytest', test_reference_dict)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
 
@@ -190,10 +213,10 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
     print("node and relation has been created between test file and relative nodes")
 
 
-def process_source_code_files(file_path: str, ParentID: str, reponame: str):
-    file_id = f"SOURCECODEFILE:{file_path}:{file_extension}"
-    file_name = os.path.basename(file_path)
+async def process_source_code_files(file_path: str, ParentID: str, reponame: str):
     file_extension = Path(file_path).suffix.lstrip('.')
+    file_name = os.path.basename(file_path)
+    file_id = f"SOURCECODEFILE:{file_path}:{file_extension}"
     prompt = """
             "Analyze the provided testing file and summarize its key components. Include:
             The testing framework used (e.g., Jest, Mocha, JUnit, Pytest).
@@ -203,10 +226,11 @@ def process_source_code_files(file_path: str, ParentID: str, reponame: str):
             Use the identified test framework to infer testing style and organize the summary accordingly."
         """
     #connected file to its coresponding folder 
-    app.create_data_file_node(file_id, file_id, file_name, file_path, file_extension)
+    app.create_data_file_node(file_id, file_name, file_path, file_extension)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
     # output = process_llm_calls(file_path, prompt, 'SourceCodeFile')
 
-    
-    
+    res = await read_and_parse(file_path, file_id)
+    if res:
+        print('----------------------------> reading and parsing is done')

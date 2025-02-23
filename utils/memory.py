@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 import os
-from utils.treeSitter import process_file
+from utils.tree import process_file
 
 chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
 # Define state structure

@@ -9,7 +9,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from typing import Optional, List, Dict, Any, Literal
 from langgraph.graph import StateGraph
 from langchain.prompts import PromptTemplate
-from utils.pinecone import pineconeOperation
+from utils.pinecone_db import pineconeOperation
 from langchain_neo4j import GraphCypherQAChain, Neo4jGraph
 from langchain_openai import ChatOpenAI
 

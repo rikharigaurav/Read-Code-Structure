@@ -11,6 +11,7 @@ import os
 from utils.neodb import app
 from dotenv import load_dotenv
 from urllib.parse import urlparse
+from utils.pinecone_db import pinecone
 
 
 load_dotenv()
@@ -64,82 +65,18 @@ class PathResolver:
     #     return str((current_dir / import_path.replace('.', '/')).with_suffix('.py'))
     
 relative_path = PathResolver(os.getenv('projectROOT'))
+def extract_string_value(node):
+    """Extract string value from AST node, handling concatenations and prefixes"""
+    if node.type in {"string", "string_literal"}:
+        # Handle concatenated strings and f-strings
+        if node.child_count > 0:
+            return "".join([
+                c.text.decode("utf8") for c in node.children
+                if c.type in {"string_content", "escape_sequence"}
+            ])
+        return node.text.decode("utf8").strip("\"'")
+    return None
 
-def extract_api_route(node, current_level=0):
-    """
-    Extract API route from a request method call node.
-    Returns tuple of (route, method_name)
-    """
-    if not node:
-        return None, None
-
-    # Get the method name (get, post, etc)
-    method_node = node.child_by_field_name("method")
-    if not method_node:
-        return None, None
-    
-    method_name = method_node.text.decode("utf8")
-    
-    # Get arguments node
-    argument_node = node.child_by_field_name("arguments")
-    if not argument_node:
-        return None, method_name
-
-    # Extract route from first string argument
-    route = None
-    for child in argument_node.named_children:
-        # Handle different types of string arguments
-        if child.type in {"string", "string_literal", "formatted_string"}:
-            if child.type == "formatted_string":
-                # Handle f-strings
-                parts = []
-                for part in child.named_children:
-                    if part.type == "string_content":
-                        parts.append(part.text.decode("utf8"))
-                    elif part.type == "interpolation":
-                        parts.append("{}")  # Placeholder for interpolated values
-                route = "".join(parts)
-            else:
-                # Handle regular strings
-                route = child.text.decode("utf8").strip("\"'")
-            break
-        elif child.type == "call":
-            # Handle cases where the URL is constructed by a function call
-            route = "DYNAMIC_ROUTE"
-            break
-        elif child.type == "identifier":
-            # Handle cases where the URL is stored in a variable
-            route = f"VAR_{child.text.decode('utf8')}"
-            break
-
-    return route, method_name
-
-def process_request_call(node, current_level, parent_id, pending_rels):
-    """
-    Process a request method call and create appropriate relationships.
-    """
-    route, method_name = extract_api_route(node, current_level)
-    
-    print(f"{'  ' * current_level}🎯 Processing API call:")
-    print(f"{'  ' * (current_level + 1)}Method: {method_name}")
-    print(f"{'  ' * (current_level + 1)}Route: {route}")
-
-    if route:
-        method_upper = method_name.upper()
-        target_id = f"APIENDPOINT:{route}:{method_upper}"
-        
-        if parent_id:
-            print(f"{'  ' * current_level}Creating relationship:")
-            print(f"{'  ' * (current_level + 1)}From: {parent_id}")
-            print(f"{'  ' * (current_level + 1)}To: {target_id}")
-            print(f"{'  ' * (current_level + 1)}Type: {method_upper}")
-            
-            pending_rels.add_relationship(parent_id, target_id, method_upper)
-            return True
-    
-    return False
-
-#-----------------------------------------
 
 def get_function_arguments(function_node):
     """Extract argument names from a function_definition node."""
@@ -352,30 +289,58 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                             if argument_node and argument_node.child_count > 0:
                                 route = None
                                 print("Inspecting argument node children:")
+                                
+                                # Separate positional and keyword arguments
+                                positional_args = []
+                                keyword_args = {}
+                                
                                 for child in argument_node.children:
                                     print("Child type:", child.type, "Text:", child.text.decode("utf8"))
-                                    if child.type in {"string", "string_literal", "string_content"}:
-                                        # Handle compound string nodes
-                                        if child.child_count > 0:
-                                            route = "".join(c.text.decode("utf8") for c in child.children)
-                                        else:
-                                            route = child.text.decode("utf8")
+                                    if child.type == 'keyword_argument':
+                                        key_node = child.child_by_field_name('name')
+                                        value_node = child.child_by_field_name('value')
+                                        if key_node and value_node:
+                                            keyword = key_node.text.decode('utf8')
+                                            keyword_args[keyword] = value_node
+                                    else:
+                                        positional_args.append(child)
+
+                                # Check positional arguments first
+                                for arg in positional_args:
+                                    route = extract_string_value(arg)
+                                    if route: 
                                         break
-                                if route is not None:
+
+                                # If no route found, check url keyword
+                                if not route and 'url' in keyword_args:
+                                    route = extract_string_value(keyword_args['url'])
+
+                                # Process found route
+                                if route:
                                     route = route.strip("\"'")
-                                    # Extract only the path from the URL
                                     parsed_url = urlparse(route)
-                                    if parsed_url.path:
-                                        route = parsed_url.path
+                                    route = parsed_url.path or route  # Use path if valid URL
                                     print("Extracted route:", route)
                                 else:
                                     print("No literal route found for API call")
+                                    route = "UNKNOWN_ROUTE"  # Fallback value
 
                                 target_id = f"APIENDPOINT:{route}:{method_name.upper()}"
-                                                                
-                                if target_id and parent_id:
+                                if parent_id:
                                     print(f"Detected API Call - method: {method_name.upper()}, route: {route}")
                                     pending_rels.add_relationship(parent_id, target_id, method_name.upper())
+
+                        else:
+                            target_id = None
+                            for key in imports.keys():
+                                if object_name in key:
+                                    target_id = f"FUNCTION:{imports[key]}:{method_name}"
+                                    break
+
+                            if target_id and parent_id:
+                                print(f"----------------------------> relation built {parent_id} --> {target_id}")
+                                pending_rels.add_relationship(parent_id, target_id, 'CALLS')
+
 
 
                 elif function_node and function_node.type == "identifier":
@@ -393,7 +358,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                             print(f"----------------------------> relation built {parent_id} --> {target_id}")
                             pending_rels.add_relationship(parent_id, target_id, 'CALLS')
 
-            if node.type == "decorated_definition":
+            elif node.type == "decorated_definition":
                 # print(f"{'  ' * current_level}🎭 Processing decorated definition")
                 function_node = None
                 for child in node.children:
@@ -436,6 +401,9 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                     node_id = f"APIENDPOINT:{route}:{http_method}"
                     # print(f"---------------------------->         node created {node_id}")
                     app.create_api_endpoint_node(node_id, route, http_method)
+                    # code: str = node.text.decode('utf8')  
+                    # embedding = await pinecone.get_embeddings(code) 
+                    # app.update_node_vector_format(node_id, embedding, 'APIEndpoint')
                     if parent_id:
                         # print(f"---------------------------->         relation built {node_id}  --> {current_state.parent_id}")
                         app.create_relation(node_id, parent_id, 'BELONGS_TO')
@@ -451,7 +419,9 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 # print(f"{'  ' * current_level}📝 Processing function definition: {func_name} params: {params} return_type: {return_type} relative_path : {relative_file_path}")
                 # print(f"NODE ID : {node_id}")
                 app.create_function_node(node_id, func_name, file_path, return_type)
-                # print(f"---------------------------->         node created {node_id}")
+                # code: str = node.text.decode('utf8')  
+                # embedding = await pinecone.get_embeddings(code)
+                # app.update_node_vector_format(node_id, embedding, 'Function')
                 fixed_parent_id = node_id
                 current_state.processed = True
                 if parent_id:

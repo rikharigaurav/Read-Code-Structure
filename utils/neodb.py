@@ -94,24 +94,24 @@ class App:
     #         print(f"Query failed: {e}")
     #         return None
 
-    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext, file_type, dependencies):
+    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext, dependencies):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext, file_type, dependencies
+                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext, dependencies
             )
             return result
 
     @staticmethod
-    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext, file_type, dependencies):
+    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext, dependencies):
         query = (
             "MERGE (tmf:TemplateMarkupFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, file_type: $file_type, dependencies: $dependencies }) "
+            "file_ext: $file_ext, dependencies: $dependencies }) "
             "SET tmf.vector_id = NULL, tmf.summary = '' "  # Added empty summary
             "RETURN tmf"
         )
         result = tx.run(
             query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
-            file_type=file_type, dependencies=dependencies
+            dependencies=dependencies
         )
         try:
             record = result.single()
@@ -152,24 +152,24 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext, file_type, purpose):
+    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext, purpose):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_documentation_file_node, file_id, file_name, file_path, file_ext, file_type, purpose
+                self._create_documentation_file_node, file_id, file_name, file_path, file_ext,  purpose
             )
             return result
 
     @staticmethod
-    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext, file_type, purpose):
+    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext, purpose):
         query = (
             "MERGE (df:DocumentationFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, file_type: $file_type, purpose: $purpose }) "
+            "file_ext: $file_ext, purpose: $purpose }) "
             "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
             "RETURN df"
         )
         result = tx.run(
             query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
-            file_type=file_type, purpose=purpose
+            purpose=purpose
         )
         try:
             record = result.single()
@@ -191,7 +191,7 @@ class App:
     def _create_api_endpoint_node(tx, nodeID, url, http_method):
         query = (
             "MERGE (ae:APIEndpoint { id: $nodeID, endpoint: $url, http_method: $http_method }) "
-            "SET ae.vector_id = NULL "
+            "SET ae.vector_format = NULL "
             "RETURN ae"
         )
         result = tx.run(query, nodeID=nodeID, url=url, http_method=http_method)
@@ -223,6 +223,7 @@ class App:
             "MERGE (f:Function { id: $function_id }) "
             "SET f.function_name = $function_name, "
             "f.file_path = $file_path, "
+            "f.vector_format = null, "
             "f.return_type = $return_type "
             "RETURN f"
         )
@@ -353,15 +354,15 @@ class App:
             print(f"Query failed: {e}")
             return False
 
-    def update_folder_context(self, node_id, vector_format):
+    def update_node_vector_format(self, node_id, vector_format, node_label):
         with self.driver.session(database="neo4j") as session:
-            result = session.write_transaction(self._update_vector_format, node_id, vector_format)
+            result = session.write_transaction(self._update_vector_format, node_id, vector_format, node_label)
             return result
-
     @staticmethod
-    def _update_vector_format(tx, node_id, vector_format):
+    def _update_vector_format(tx, node_id, vector_format, node_label):
+        # Safely interpolate the node_label into the query
         query = (
-            "MATCH (n {id: $node_id}) "
+            f"MATCH (n:{node_label} {{id: $node_id}}) "  # Dynamic label
             "SET n.vector_format = $vector_format "
             "RETURN n.id AS node_id, n.vector_format AS updated_vector_format"
         )

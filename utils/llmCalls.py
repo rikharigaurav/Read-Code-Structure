@@ -101,7 +101,6 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
 
         # Loop through each category field and call its associated handler function.
         # Debugging: Print type of result
-        print("jasdfhjdh")
         print(f"Type of result: {type(result)}")
 
         # Check if result is a dictionary and print available keys

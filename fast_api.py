@@ -6,9 +6,16 @@ from utils.L_graph import getFilesContext
 # from utils.llmCalls import llm_check
 
 app = FastAPI()
+class Data(BaseModel):
+    repo_url: str
 class data(BaseModel):
     repoUrl: str    
     docsUrl: str | None = None
+
+@app.post("/test/")
+async def test(data: Data):
+    print(data.repo_url)
+    return {'status_code': 200}
 
 @app.post("/github/")
 async def repo(Body: data):
@@ -18,8 +25,8 @@ async def repo(Body: data):
     if(repoUrl):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
-        fullPath = await clone_repository(repoUrl, "./")
-        # fullPath = 'Read-Code-Structure'
+        # fullPath = await clone_repository(repoUrl, "./")
+        fullPath = 'Read-Code-Structure'
         # print("Full system path for repo", fullPath)
         # Create a pinecone index
         if(fullPath):
@@ -30,6 +37,7 @@ async def repo(Body: data):
             await getFilesContext(fullPath, repoName)
 
         # Get context for all the files and code bases using Langchain and Hugginface
-
     else:
         return {"repoUrl": "No repo url provided"}
+
+    return {'status_code': 200}

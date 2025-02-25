@@ -1,6 +1,7 @@
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 # from langchain.vectorstores import Pinecone
-from langchain_community.embeddings import CohereEmbeddings
+# from langchain_community.embeddings import CohereEmbeddings
+from langchain_cohere import CohereEmbeddings
 from hashlib import md5
 from pinecone import Pinecone, ServerlessSpec
 import os
@@ -10,24 +11,20 @@ class pineconeOperation:
     def __init__(self, index):
         self.pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-        self.embeddings = CohereEmbeddings(
-                api_key=os.getenv("COHERE_API_KEY"),
-                batch_size=48
-        )      
+        self.embeddings = CohereEmbeddings(model="embed-english-light-v3.0")
 
         self.index_name = index
 
     async def get_embeddings(self, text: str):
         try:
-            res = self.embeddings.embed_query(text)
-            print(res)
+            res = self.embeddings.embed_documents([text])
+            # print(res)
             return res
         except Exception as error:
             print("Error calling embeddings API", error)
             raise error
         
 
-    # Embed a single document
     def embed_text(self, text):
         try: 
             print("Text being processed:", text)
@@ -116,3 +113,4 @@ class pineconeOperation:
         return result
 
 
+pinecone = pineconeOperation('repository')

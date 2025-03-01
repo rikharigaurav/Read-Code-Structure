@@ -65,8 +65,40 @@ class PathResolver:
     #     return str((current_dir / import_path.replace('.', '/')).with_suffix('.py'))
     
 relative_path = PathResolver(os.getenv('projectROOT'))
-def extract_string_value(node):
-    """Extract string value from AST node, handling concatenations and prefixes"""
+
+def extract_imports(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            source_code = f.read()
+    except Exception as e:
+        return f"Error reading file: {e}"
+    
+    parser = Parser(PY_LANGUAGE)
+    tree = parser.parse(bytes(source_code, "utf8"))
+
+    query_string = """
+    (import_statement) @import
+    (import_from_statement) @import
+    """
+    
+    query = PY_LANGUAGE.query(query_string)
+    
+    # Execute the query
+    captures = query.captures(tree.root_node)
+    
+    # Extract import statements
+    imports = []
+    for node, _ in captures:
+        # Get the text of the import statement
+        start_byte = node.start_byte
+        end_byte = node.end_byte
+        import_text = source_code[start_byte:end_byte]
+        imports.append(import_text)
+    
+    return imports
+
+
+async def extract_string_value(node):
     if node.type in {"string", "string_literal"}:
         # Handle concatenated strings and f-strings
         if node.child_count > 0:
@@ -171,14 +203,14 @@ def get_imports(code: str):
     for imp in imports:
         match = re.match(pattern, imp)
         if match:
-            module = match.group(1)  # Extract module name
-            names = match.group(2)  # Extract function(s)
+            module = match.group(1)  
+            names = match.group(2) 
 
             function_names = []
             for item in names.split(','):
-                parts = item.strip().split(' as ')  # Handle aliasing
+                parts = item.strip().split(' as ') 
                 if len(parts) == 2:
-                    function_names.extend(parts[::-1])  # Store alias first, original second
+                    function_names.extend(parts[::-1])  
                 else:
                     function_names.append(parts[0])
 
@@ -187,7 +219,7 @@ def get_imports(code: str):
     # return import_dict  # Convert tuple keys to lists
     list_like_dict = {}
     for key, value in import_dict.items():
-        list_like_key = str(list(key))  # Convert list to string representation
+        list_like_key = str(list(key))  
         list_like_dict[list_like_key] = value
 
     return list_like_dict
@@ -197,34 +229,28 @@ async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projec
         code = None
         with open(file_path, 'r') as f:
             code = f.read()
-            print("----------------> CODE ")
-            # print(code)
-
         PY_LANGUAGE = Language(tspython.language())
         parser = Parser(PY_LANGUAGE)
         tree = parser.parse(bytes(code, "utf8"))
 
-        if tree :
-            print("--------------> TREE")
         if project_root:
             project_root = str(Path(file_path).parent)
 
         path_resolver = PathResolver(project_root)
         imports = get_imports(code)
-        print("IMPORTD")
-        print(imports)
         initial_state = TraversalState(
             node=tree.root_node,  
             parent_id=parent_id,
             level=1
         )
-        print(f"---------initial state-----------> {initial_state}")
         await traverse_tree(initial_state, imports, file_path, path_resolver, parent_id)
+
+        result = parse_tree(tree.root_node)
 
     except Exception as e:
         print(f"Parsing failed: {str(e)}")
 
-    return True
+    return result
         
 
 
@@ -233,21 +259,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
     Perform pre-order DFS traversal using a tree-sitter cursor.
     Returns a list of relationships (source_id, target_id, relationship_type)
     """
-    
-    def debug_print_node(node, level, msg_type="INFO"):
-        indent = "  " * level
-        if node.type == "call":
-            print(f"{indent}🔵 [{msg_type}] Call Node: {node.text.decode('utf8')} (Line: {node.start_point[0] + 1})")
-        elif node.type == "function_definition":
-            print(f"{indent}🟢 [{msg_type}] Function Definition: {node.text.decode('utf8').split('(')[0]} (Line: {node.start_point[0] + 1})")
-        elif node.type == "decorated_definition":
-            print(f"{indent}🟡 [{msg_type}] Decorated Definition (Line: {node.start_point[0] + 1})")
-        elif node.type == "decorator":
-            print(f"{indent}🟣 [{msg_type}] Decorator: {node.text.decode('utf8')} (Line: {node.start_point[0] + 1})")
-        elif node.type == "attribute":
-            print(f"{indent}🟤 [{msg_type}] Attribute Access: {node.text.decode('utf8')} (Line: {node.start_point[0] + 1})")
-        else:
-            print(f"{indent}⚪ [{msg_type}] {node.type}: {node.text.decode('utf8')} (Line: {node.start_point[0] + 1})")
+
 
     stack = [initial_state]
     print("🚀 Starting tree traversal...")
@@ -307,19 +319,19 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
 
                                 # Check positional arguments first
                                 for arg in positional_args:
-                                    route = extract_string_value(arg)
+                                    route = await extract_string_value(arg)
                                     if route: 
                                         break
 
                                 # If no route found, check url keyword
                                 if not route and 'url' in keyword_args:
-                                    route = extract_string_value(keyword_args['url'])
+                                    route = await extract_string_value(keyword_args['url'])
 
                                 # Process found route
                                 if route:
                                     route = route.strip("\"'")
                                     parsed_url = urlparse(route)
-                                    route = parsed_url.path or route  # Use path if valid URL
+                                    route = parsed_url.path or route 
                                     print("Extracted route:", route)
                                 else:
                                     print("No literal route found for API call")
@@ -346,7 +358,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 elif function_node and function_node.type == "identifier":
                         
                         called_func = get_called_function_name(node)
-                        print(f"{'  ' * current_level}📟 Function call: {called_func}")
+                        # print(f"{'  ' * current_level}📟 Function call: {called_func}")
 
                         target_id = None
                         for key in imports.keys():
@@ -402,7 +414,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                     # print(f"---------------------------->         node created {node_id}")
                     app.create_api_endpoint_node(node_id, route, http_method)
                     # code: str = node.text.decode('utf8')  
-                    # embedding = await pinecone.get_embeddings(code) 
+                    # embedding =  pinecone.get_embeddings(code) 
                     # app.update_node_vector_format(node_id, embedding, 'APIEndpoint')
                     if parent_id:
                         # print(f"---------------------------->         relation built {node_id}  --> {current_state.parent_id}")
@@ -420,7 +432,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 # print(f"NODE ID : {node_id}")
                 app.create_function_node(node_id, func_name, file_path, return_type)
                 # code: str = node.text.decode('utf8')  
-                # embedding = await pinecone.get_embeddings(code)
+                # embedding = pinecone.get_embeddings(code)
                 # app.update_node_vector_format(node_id, embedding, 'Function')
                 fixed_parent_id = node_id
                 current_state.processed = True
@@ -446,6 +458,44 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 stack.append(TraversalState(child_node, parent_id=current_parent_id, level=child_level, processed=False))
                 if not cursor.goto_next_sibling():
                     break
+
+
+def get_name(node):
+    for child in node.children:
+        if child.type == 'identifier':
+            return child.text.decode('utf8')
+    return None
+
+def get_body(node):
+    for child in node.children:
+        if child.type == 'block':
+            return child
+    return None
+
+def parse_tree(root_node):
+    def traverse(current_node):
+        current_dict = {}
+        if current_node.type in ('class_definition', 'function_definition'):
+            name = get_name(current_node)
+            body_node = get_body(current_node)
+            if body_node:
+                # Process each statement in the body to find nested definitions
+                for statement in body_node.children:
+                    child_dict = traverse(statement)
+                    current_dict.update(child_dict)
+            if name:
+                # Use a tuple (node_type, name) as the key instead of a list
+                return {(current_node.type, name): current_dict}
+            else:
+                return {}
+        else:
+            # Process children for non-class/function nodes
+            for child in current_node.children:
+                child_dict = traverse(child)
+                current_dict.update(child_dict)
+            return current_dict
+    
+    return traverse(root_node)
 
 
 

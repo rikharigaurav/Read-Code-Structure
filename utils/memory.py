@@ -11,46 +11,15 @@ import os
 from utils.tree import process_file
 
 chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
-# Define state structure
 
-# class GraphFile(BaseModel):
-#     summary: str = Field(description = "Summary of the current node")
-#     file_type: str = Field(description="Format of the file (e.g., DOT, GraphML, JSON, YAML).")
-
-class SourceCodeFile(BaseModel):
-    summary: str = Field(description = "Summary of the current node")
-
-class CLASS(BaseModel): 
-    functionCalls: list = Field(description=" contains all the function calls inside this class ")
-    apiCalls: list = Field(description="contains all the API ROUTE calls inside this class")
-
-class Function(BaseModel):
-    arguments: list[dict] = Field(description="list all the arg name and their type")
-    functionCalls: list = Field(description=" contains all the function calls inside this class ")
-    apiCalls: list = Field(description="contains all the API ROUTE calls inside this class")
-    returnType: str = Field(description="Return type of this function")
-
-class ApiEndpoint(BaseModel):
-    routeURL: str = Field(description="Route Url of this endpoint")
-    method: str = Field(description="Http method of this endpoint")
-    functionCalls: list = Field(description=" contains all the function calls inside this class ")
-    apiCalls: list = Field(description="contains all the API ROUTE calls inside this class")
 
 class TemplateMarkupFile(BaseModel):
     summary: str = Field(description = "Summary of the current node")
     file_type: str = Field(description="Template engine or markup language, such as HTML, Handlebars, EJS, or Pug")
     dependencies: list[str] = Field(description="List of files or assets (images, stylesheets, scripts) linked or imported by the template")
 
-class TestingFile(BaseModel):
-    summary: str = Field(description = "Summary of the current node")
-    test_framework: list = Field(description="The testing framework used, such as Jest, Mocha, JUnit, or Pytest")
-    test_reference_dict: dict = Field(
-        description="Dictionary containing key-value pairs of test type and reference function or class name"
-    )
-
 class DocumentationFile(BaseModel):
     summary: str = Field(description = "Summary of the current node")
-    file_type: str = Field(description="Format of the documentation, such as Markdown or reStructuredText")
     purpose: str = Field(description="The goal of the documentation, such as API documentation, user guide, or design document")
 
 class ProcessingState(TypedDict):

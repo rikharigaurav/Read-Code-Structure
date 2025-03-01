@@ -94,24 +94,24 @@ class App:
     #         print(f"Query failed: {e}")
     #         return None
 
-    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext, dependencies):
+    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext):
+        # add depenpencies for future 
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext, dependencies
+                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext
             )
             return result
 
     @staticmethod
-    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext, dependencies):
+    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext):
         query = (
             "MERGE (tmf:TemplateMarkupFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, dependencies: $dependencies }) "
-            "SET tmf.vector_id = NULL, tmf.summary = '' "  # Added empty summary
+            "file_ext: $file_ext}) "
+            "SET tmf.vector_id = NULL, tmf.summary = '' "  # Addad empty summary
             "RETURN tmf"
         )
         result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
-            dependencies=dependencies
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext
         )
         try:
             record = result.single()
@@ -152,24 +152,23 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext, purpose):
+    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_documentation_file_node, file_id, file_name, file_path, file_ext,  purpose
+                self._create_documentation_file_node, file_id, file_name, file_path, file_ext
             )
             return result
 
     @staticmethod
-    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext, purpose):
+    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext):
         query = (
             "MERGE (df:DocumentationFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, purpose: $purpose }) "
-            "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
+            "file_ext: $file_ext}) "
+            "SET df.vector_id = NULL, df.summary = '' "  
             "RETURN df"
         )
         result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
-            purpose=purpose
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext
         )
         try:
             record = result.single()

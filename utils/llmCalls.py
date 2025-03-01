@@ -4,14 +4,19 @@ from pydantic import BaseModel, Field, ValidationError
 from langchain.prompts import PromptTemplate
 from utils.neodb import app
 from pathlib import Path
-# from utils.pinecone_db import pineconeOperation
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_mistralai.chat_models import ChatMistralAI
 from typing import Union, List
 from utils.pending_rela import pending_rels
-from utils.tree import relative_path, read_and_parse, get_imports
+from utils.tree import relative_path, read_and_parse, get_imports, extract_imports
+from utils.pinecone_db import pinecone
+from utils.memory import process_llm_calls, DocumentationFile, TemplateMarkupFile
 
-    
+class TestType(BaseModel):
+    test_framework: str = Field(
+        description="Framework used by the file for test cases"
+    )
+
 class FileTypeScheme(BaseModel):
     Source_Code_Files: Union[str, List[str]] = Field(
         description="Files that contain source code"
@@ -170,24 +175,34 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
     file_name = os.path.basename(fullPath)
     file_extension = Path(fullPath).suffix.lstrip('.')
     file_id = f"TESTINGFILE:{fullPath}:{file_extension}"
-    prompt = """
-            "Analyze the provided testing file and summarize its key components. Include:
-            The testing framework used (e.g., Jest, Mocha, JUnit, Pytest).
-            The purpose of the tests in the file (e.g., unit tests, integration tests, end-to-end tests).
-            A high-level breakdown of test cases and their objectives.
-            Any conditions being validated, including inputs, expected outputs, and mock data.
-            Use the identified test framework to infer testing style and organize the summary accordingly."
-        """
-    
-    # output = process_llm_calls(fullPath, prompt, 'TestingFile')
     code = None
     with open(fullPath, 'r') as f:
         code = f.read()
 
     test_reference_dict = get_imports(code)
+    test_file_imports = extract_imports(fullPath)
+    parser = JsonOutputParser(pydantic_object=TestType)
 
-    # create node for testing file and respective relations
-    app.create_testing_file_node(file_id, file_name, fullPath, file_extension, 'pytest', test_reference_dict)
+    prompt_template = PromptTemplate(
+        prompt = '''
+        Given the following import list from a test file, identify the testing framework used to test the functions. 
+            If multiple frameworks are present, list them separated by commas; if none are detected, output "None".
+            
+            Import list: {test_file_imports}
+            
+            {format_instructions}
+    ''',
+        input_variables = ['test_file_imports'], 
+        partial_variables = {'format_instructions': parser.get_format_instructions()},
+    )
+
+    chain = prompt_template | chat | parser
+    result = chain.invoke({
+        'test_file_imports': test_file_imports
+    })
+    print(f"The test framework used in the result is {result}")
+
+    app.create_testing_file_node(file_id, file_name,fullPath, file_extension, result, test_reference_dict)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
 
@@ -202,9 +217,6 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
                 references_ID = f"FUNCTION:{rel_path}:{test_function}"
                 pending_rels.add_relationship(file_id, references_ID, 'TESTS')
 
-    # namespace = pineconeOperation.load_text_to_pinecone(output['result'], REPONAME)
-    # app.update_summary_context(file_id, output['prop']['summary'])
-    # app.update_folder_context(file_id, namespace)
 
     print("node and relation has been created between test file and relative nodes")
 
@@ -213,20 +225,31 @@ async def process_source_code_files(file_path: str, ParentID: str, reponame: str
     file_extension = Path(file_path).suffix.lstrip('.')
     file_name = os.path.basename(file_path)
     file_id = f"SOURCECODEFILE:{file_path}:{file_extension}"
-    prompt = """
-            "Analyze the provided testing file and summarize its key components. Include:
-            The testing framework used (e.g., Jest, Mocha, JUnit, Pytest).
-            The purpose of the tests in the file (e.g., unit tests, integration tests, end-to-end tests).
-            A high-level breakdown of test cases and their objectives.
-            Any conditions being validated, including inputs, expected outputs, and mock data.
-            Use the identified test framework to infer testing style and organize the summary accordingly."
-        """
-    #connected file to its coresponding folder 
+
     app.create_data_file_node(file_id, file_name, file_path, file_extension)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
-    # output = process_llm_calls(file_path, prompt, 'SourceCodeFile')
+    file_structure = await read_and_parse(file_path, file_id)
+    if file_structure:
+        pinecone.load_text_to_pinecone(file_path, file_id, file_structure)
 
-    res = await read_and_parse(file_path, file_id)
-    if res:
-        print('----------------------------> reading and parsing is done')
+async def process_documentation_files(file_path: str, ParentID: str, reponame: str):
+    file_extension = Path(file_path).suffix.lstrip('.')
+    file_name = os.path.basename(file_path)
+    file_id = f"DOCUMENTATIONFILE:{file_path}:{file_extension}"
+
+    app.create_documentation_file_node(file_id, file_name, file_path, file_extension)
+    app.create_relation(file_id, ParentID, "BELONGS_TO")
+
+    pinecone.load_text_to_pinecone(file_path, file_id)
+
+async def process_template_files(file_path: str, ParentID: str, reponame: str):
+    file_extension = Path(file_path).suffix.lstrip('.')
+    file_name = os.path.basename(file_path)
+    file_id = f"TEMPLATEMARKUPFILE:{file_path}:{file_extension}"
+
+    app.create_template_markup_file_node(file_id, file_name, file_path, file_extension)
+    app.create_relation(file_id, ParentID, "BELONGS_TO")
+
+    pinecone.load_text_to_pinecone(file_path, file_id)
+    

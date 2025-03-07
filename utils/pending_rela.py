@@ -1,7 +1,5 @@
 from utils.neodb import app
 import traceback
-
-
 class PendingRelationships:
     def __init__(self):
         self.pending_relationships = []

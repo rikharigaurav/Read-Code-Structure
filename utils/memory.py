@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 import os
-from utils.tree import process_file
+from utils.tree import extract_imports
 
 chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
 
@@ -129,7 +129,7 @@ def generate_summary(state: ProcessingState) -> dict:
     )
     parser = JsonOutputParser(pydantic_object=state['fileSchema'])
 
-    import_statement = process_file(state['file_path'])
+    import_statement = extract_imports(state['file_path'])
     
     summary_prompt = PromptTemplate(
         template='''

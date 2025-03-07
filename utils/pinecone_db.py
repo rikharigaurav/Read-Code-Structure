@@ -18,6 +18,12 @@ class pineconeOperation:
 
         self.index_name = index
 
+    def convert_to_serializable(self, data):
+        """Convert non-serializable tuple keys to strings."""
+        if isinstance(data, dict):
+            return {str(k): self.convert_to_serializable(v) for k, v in data.items()}
+        return data
+
     def get_embeddings(self, text: str):
         try:
             res = self.embeddings.embed_documents([text])
@@ -30,18 +36,31 @@ class pineconeOperation:
 
     def embed_text(self, text, file_structure=None):
         try: 
-            print("Text being processed:", text)
+            # print("Text being processed:", text)
 
             embeddings = self.get_embeddings(text)
-            print("Embeddings:", embeddings)
+            # print("Embeddings:", embeddings)
 
             hash_id = md5(text.encode()).hexdigest()
-            print("Hash:", hash_id)
+            # print("Hash:", hash_id)
             metadata = {
                 "text": self.truncate_string_by_bytes(text, 3600)
             }
             
             if file_structure is not None:
+                # serializable_structure = {}
+                # for key, value in file_structure.items():
+                #     if isinstance(key, tuple):
+                #         new_key = f"{key[0]}:{key[1]}"  
+                #     else:
+                #         new_key = str(key)
+                    
+                #     # Also convert any nested dictionaries
+                #     if isinstance(value, dict):
+                #         serializable_structure[new_key] = self.convert_to_serializable(value)
+                #     else:
+                #         serializable_structure[new_key] = value
+                
                 metadata["File_Structure"] = file_structure
 
             record = {
@@ -49,7 +68,7 @@ class pineconeOperation:
                 "values": embeddings[0],    
                 "metadata": metadata,
             }
-            print("Pinecone Record:", record)
+            # print("Pinecone Record:", record)
 
             return record
         except Exception as error:
@@ -91,17 +110,18 @@ class pineconeOperation:
         
         namespace_name = file_id
         try:
-            print("Processing content for namespace:", namespace_name)
+            # print("Processing content for namespace:", namespace_name)
 
             # Split and embed text
+            # serializable_structure = self.convert_to_serializable(file_structure) if file_structure else None
             texts = self.prepare_document(content)
             vectors = [self.embed_text(text, file_structure) for text in texts]
-            print("Vectors of the text:", vectors)
+            # print("Vectors of the text:", vectors)
 
             # Upload vectors to Pinecone
             index = self.pc.Index(self.index_name)
             response = index.upsert(vectors=vectors, namespace=namespace_name)
-            print("Vectors uploaded to Pinecone:", response)
+            # print("Vectors uploaded to Pinecone:", response)
 
             print("Successfully uploaded vectors to Pinecone")
             return namespace_name
@@ -122,5 +142,9 @@ class pineconeOperation:
 
         return result
 
+    def delete_index(self):
+        if self.pc.has_index(self.index_name):
+            self.pc.delete_index(self.index_name)
+            print("Index deleted successfully")
 
 pinecone = pineconeOperation('repository')

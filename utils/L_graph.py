@@ -2,11 +2,12 @@ import os
 from utils.llmCalls import get_file_type
 from utils.pending_rela import pending_rels
 from pathlib import Path
-
+from utils.pinecone_db import pinecone
 from utils.neodb import app
 
 async def getFilesContext(startPath: str, reponame: str):
     pending_rels.clear_relationships()
+    pinecone.delete_index()
     app.remove_all()
     print(f"The repo name is {reponame}")
     ignored_files = []  

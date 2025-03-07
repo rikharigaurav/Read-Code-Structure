@@ -15,6 +15,7 @@ class data(BaseModel):
 async def repo(Body: data):
     repo_url = Body.repo_url
     # docsUrl = Body.docsUrl
+    print(repo_url)
 
     if(repo_url):
         # print("Current repo url",repoUrl),
@@ -26,7 +27,7 @@ async def repo(Body: data):
         if(fullPath):
             repoName = Path(fullPath).name
             print(repoName)
-            # await getFilesContext(fullPath, repoName)
+            await getFilesContext(fullPath, repoName)
         return {
             'status_code': 200,
             'localPath': repoName,

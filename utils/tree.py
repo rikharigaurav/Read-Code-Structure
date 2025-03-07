@@ -76,25 +76,33 @@ def extract_imports(file_path):
     parser = Parser(PY_LANGUAGE)
     tree = parser.parse(bytes(source_code, "utf8"))
 
-    query_string = """
-    (import_statement) @import
-    (import_from_statement) @import
-    """
-    
-    query = PY_LANGUAGE.query(query_string)
-    
-    # Execute the query
-    captures = query.captures(tree.root_node)
-    
-    # Extract import statements
     imports = []
-    for node, _ in captures:
-        # Get the text of the import statement
-        start_byte = node.start_byte
-        end_byte = node.end_byte
-        import_text = source_code[start_byte:end_byte]
-        imports.append(import_text)
-    
+    cursor = tree.walk()
+
+    reached_root = False
+    while not reached_root:
+        current_node = cursor.node
+        if current_node.type in ('import_statement', 'import_from_statement'):
+            import_text = current_node.text.decode('utf8')
+            imports.append(import_text)
+
+        # Traverse to the first child if possible
+        if cursor.goto_first_child():
+            continue
+
+        # If no child, try moving to the next sibling
+        if cursor.goto_next_sibling():
+            continue
+
+        # If no sibling, move up to the parent and check siblings
+        retracing = True
+        while retracing:
+            if not cursor.goto_parent():
+                retracing = False
+                reached_root = True
+            elif cursor.goto_next_sibling():
+                retracing = False
+
     return imports
 
 
@@ -168,15 +176,24 @@ def install_tree_sitter_language(language: str):
         except subprocess.CalledProcessError:
             raise RuntimeError(f"Failed to install Tree-sitter for language '{language}'. Package not available.")
 
-#Returns the import part of a code file
-
 def get_imports(code: str):
+    """
+    Extract from-import statements from Python code and return a dictionary
+    where keys are imported function names and values are the module paths.
+    
+    Args:
+        code (str): Python source code to analyze
+        
+    Returns:
+        dict: Dictionary mapping function names to their modules
+    """
     parser = Parser(PY_LANGUAGE)
     tree = parser.parse(bytes(code, "utf8"))
 
     imports = []
     cursor = tree.walk()
 
+    # Extract import statements
     reached_root = False
     while not reached_root:
         if cursor.node.type == 'import_from_statement':
@@ -196,35 +213,30 @@ def get_imports(code: str):
             elif cursor.goto_next_sibling():
                 retracing = False
 
-    import_dict = {}
-
+    # Process the imports
+    result_dict = {}
     pattern = r'from\s+([\w\.]+)\s+import\s+([\w\s,]+(?:\s+as\s+\w+)?)'
 
     for imp in imports:
         match = re.match(pattern, imp)
         if match:
-            module = match.group(1)  
-            names = match.group(2) 
+            module = match.group(1)  # Module path
+            names = match.group(2)   # Imported names
 
-            function_names = []
+            # Process each imported name
             for item in names.split(','):
-                parts = item.strip().split(' as ') 
-                if len(parts) == 2:
-                    function_names.extend(parts[::-1])  
+                item = item.strip()
+                if ' as ' in item:
+                    original_name, alias = item.split(' as ', 1)
+                    # Store the original name (not the alias)
+                    result_dict[original_name.strip()] = module
                 else:
-                    function_names.append(parts[0])
-
-            import_dict[tuple(function_names)] = module
-
-    # return import_dict  # Convert tuple keys to lists
-    list_like_dict = {}
-    for key, value in import_dict.items():
-        list_like_key = str(list(key))  
-        list_like_dict[list_like_key] = value
-
-    return list_like_dict
+                    result_dict[item] = module
+    # print(result_dict)
+    return result_dict
             
 async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projectROOT')):
+    result = None
     try:
         code = None
         with open(file_path, 'r') as f:
@@ -246,6 +258,8 @@ async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projec
         await traverse_tree(initial_state, imports, file_path, path_resolver, parent_id)
 
         result = parse_tree(tree.root_node)
+        print('=============================')
+        print(f"the file structure is {result}")
 
     except Exception as e:
         print(f"Parsing failed: {str(e)}")

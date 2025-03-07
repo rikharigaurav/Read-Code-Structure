@@ -51,6 +51,50 @@ st.markdown("""
         border-radius: 4px;
         padding: 2px 5px;
     }
+    .issue-card {
+        background-color: #1e1e1e;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 10px;
+    }
+    .issue-number {
+        color: #990000;
+        font-weight: bold;
+    }
+    .search-container {
+        background-color: #1e1e1e;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+    }
+    .issue-btn {
+        text-align: left;
+        background-color: #1e1e1e;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 10px;
+        margin-bottom: 5px;
+        cursor: pointer;
+        width: 100%;
+    }
+    .issue-btn:hover {
+        background-color: #333333;
+    }
+    .search-btn {
+        background-color: #990000;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 8px 16px;
+    }
+    .search-input {
+        background-color: #2c2c2c;
+        color: white;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,6 +109,10 @@ if 'selected_file' not in st.session_state:
     st.session_state.selected_file = None
 if 'chat_messages' not in st.session_state:
     st.session_state.chat_messages = []
+if 'issue_search' not in st.session_state:
+    st.session_state.issue_search = ""
+if 'filtered_issues' not in st.session_state:
+    st.session_state.filtered_issues = []
 
 def get_repo_issues(repo_url):
     """Get issues from GitHub repository"""
@@ -102,7 +150,9 @@ def handle_submit():
                 "issues": issues
             }
             
-            # Change page
+            # Initialize filtered issues with all issues
+            st.session_state.filtered_issues = issues
+            
             st.session_state.page = 'repo_view'
         else:
             st.error(f"API request failed with status code: {response.status_code}")
@@ -159,6 +209,23 @@ def add_chat_message(text, is_user=True):
         'timestamp': datetime.now().strftime("%H:%M:%S")
     })
 
+def search_issues():
+    """Filter issues based on search query"""
+    search_query = st.session_state.issue_search.lower()
+    if search_query:
+        st.session_state.filtered_issues = [
+            issue for issue in st.session_state.repo_data["issues"]
+            if (search_query in issue['title'].lower() or 
+                (issue['body'] and search_query in issue['body'].lower()) or
+                str(issue['number']) == search_query)
+        ]
+    else:
+        st.session_state.filtered_issues = st.session_state.repo_data["issues"]
+
+def select_issue(issue):
+    """Set the selected issue"""
+    st.session_state.selected_issue = issue
+
 def show_home_page():
     """Render home page"""
     st.title("GITHUB CODE PARSER")
@@ -208,17 +275,58 @@ def show_repo_page():
         tab1, tab2, tab3 = st.tabs(["ISSUES", "CODE VIEWER", "CHAT BOT"])
         
         with tab1:
-            if st.session_state.repo_data["issues"]:
-                for issue in st.session_state.repo_data["issues"]:
-                    if st.button(f"#{issue['number']} - {issue['title']}", key=f"issue_{issue['number']}"):
-                        st.session_state.selected_issue = issue
+            st.markdown("### REPOSITORY ISSUES")
+            
+            # Add search container
+            with st.container():
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.text_input("Search issues by title, content, or issue number", 
+                                  key="issue_search",
+                                  value=st.session_state.issue_search)
+                with col2:
+                    if st.button("Search", key="search_button"):
+                        search_issues()
+            
+            # Display issues with improved styling
+            if st.session_state.filtered_issues:
+                for issue in st.session_state.filtered_issues:
+                    # Create a container for each issue
+                    with st.container():
+                        # Display issue number in red and title
+                        issue_text = f"#{issue['number']} - {issue['title']}"
+                        
+                        # Use a regular button with custom styling for issues
+                        if st.button(issue_text, key=f"issue_{issue['number']}"):
+                            select_issue(issue)
+                        
+                        # Display issue metadata (date, state, comments)
+                        st.write(f"Created: {issue.get('created_at', 'N/A')} | State: {issue.get('state', 'N/A')} | Comments: {issue.get('comments', 0)}")
+                        st.markdown("---")
                 
+                # Display selected issue details
                 if st.session_state.selected_issue:
-                    st.markdown("### Selected Issue")
-                    st.markdown(f"**#{st.session_state.selected_issue['number']} - {st.session_state.selected_issue['title']}**")
-                    st.markdown(st.session_state.selected_issue['body'])
+                    st.markdown("### ISSUE DETAILS")
+                    issue_num = st.session_state.selected_issue['number']
+                    issue_title = st.session_state.selected_issue['title']
+                    
+                    # Display issue number and title
+                    st.markdown(f"## #{issue_num} - {issue_title}")
+                    
+                    # Issue metadata
+                    st.markdown(f"**Created by:** {st.session_state.selected_issue.get('user', {}).get('login', 'Unknown')}")
+                    st.markdown(f"**Status:** {st.session_state.selected_issue.get('state', 'Unknown')}")
+                    st.markdown(f"**Created at:** {st.session_state.selected_issue.get('created_at', 'Unknown')}")
+                    st.markdown(f"**Updated at:** {st.session_state.selected_issue.get('updated_at', 'Unknown')}")
+                    
+                    # Issue body
+                    st.markdown("### Description")
+                    st.markdown(st.session_state.selected_issue.get('body', 'No description provided.'))
             else:
-                st.write("No issues found for this repository.")
+                if st.session_state.issue_search:
+                    st.info(f"No issues found matching '{st.session_state.issue_search}'. Clear search to view all issues.")
+                else:
+                    st.info("No issues found for this repository.")
         
         with tab2:
             st.markdown("### CODE VIEWER")
@@ -272,7 +380,8 @@ def show_repo_page():
                                 json={
                                     "message": user_input,
                                     "repo_path": st.session_state.repo_data["local_path"],
-                                    "selected_file": st.session_state.selected_file
+                                    "selected_file": st.session_state.selected_file,
+                                    "selected_issue": st.session_state.selected_issue
                                 }
                             )
                             

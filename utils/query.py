@@ -177,7 +177,6 @@ def vectorCalls(state):
     results = []
     for query in state["decomposed_queries"]:
         if query["search_type"] in ("vector", "hybrid"):
-            # CREATE CONTEXT TO RETRIEVE DATA FROM PINECONE
             context = ":"
             restrived_Data = pc.retrieve_data_from_pincone(context)
             parser = JsonOutputParser(pydantic_object=context_output_structure)
@@ -219,9 +218,6 @@ def graphCalls(state):
             context = chain.invoke({"query": DQ['subquery']})
 
 
-
-def aggregate_result(state):
-    return 1
 
 
 

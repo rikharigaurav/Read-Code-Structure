@@ -8,9 +8,8 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_mistralai.chat_models import ChatMistralAI
 from typing import Union, List
 from utils.pending_rela import pending_rels
-from utils.tree import relative_path, read_and_parse, get_imports, extract_imports
+from utils.tree import read_and_parse, get_imports, extract_imports
 from utils.pinecone_db import pinecone
-from utils.memory import process_llm_calls, DocumentationFile, TemplateMarkupFile
 
 class TestType(BaseModel):
     test_framework: str = Field(
@@ -171,7 +170,6 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
             description="Dictionary containing key-value pairs (str: list) of test type and reference function or class name"
         )
     """
-
     file_name = os.path.basename(fullPath)
     file_extension = Path(fullPath).suffix.lstrip('.')
     file_id = f"TESTINGFILE:{fullPath}:{file_extension}"
@@ -180,11 +178,14 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
         code = f.read()
 
     test_reference_dict = get_imports(code)
+    test_reference_str = json.dumps(test_reference_dict) if test_reference_dict else "{}"
+    print(test_reference_str)
     test_file_imports = extract_imports(fullPath)
+    print(test_file_imports)
     parser = JsonOutputParser(pydantic_object=TestType)
 
     prompt_template = PromptTemplate(
-        prompt = '''
+        template = '''
         Given the following import list from a test file, identify the testing framework used to test the functions. 
             If multiple frameworks are present, list them separated by commas; if none are detected, output "None".
             
@@ -202,23 +203,26 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
     })
     print(f"The test framework used in the result is {result}")
 
-    app.create_testing_file_node(file_id, file_name,fullPath, file_extension, result, test_reference_dict)
+    app.create_testing_file_node(file_id, file_name,fullPath, file_extension, result['test_framework'], test_reference_str)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
 
-    for test_function, function_file_path in test_reference_dict.items():
-        rel_path = relative_path.get_relative_path(function_file_path)
-        if isinstance(test_function, tuple):
-            if(test_function[0]):
-                references_ID = f"FUNCTION:{rel_path}:{test_function[0]}"
+    for key, function_file_path in test_reference_dict.items():
+        # print(key)
+        # print(function_file_path)
+        # rel_path = relative_path.get_relative_path(function_file_path)
+        if isinstance(key, tuple):
+            if key and key[0]:
+                references_ID = f"FUNCTION:{function_file_path}:{key[0]}"
                 pending_rels.add_relationship(file_id, references_ID, 'TESTS')
         else:
-            if test_function :
-                references_ID = f"FUNCTION:{rel_path}:{test_function}"
+            if key:
+                references_ID = f"FUNCTION:{function_file_path}:{key}"
                 pending_rels.add_relationship(file_id, references_ID, 'TESTS')
 
+    pinecone.load_text_to_pinecone(fullPath, file_id)
 
-    print("node and relation has been created between test file and relative nodes")
+    # print("node and relation has been created between test file and relative nodes")
 
 
 async def process_source_code_files(file_path: str, ParentID: str, reponame: str):
@@ -231,6 +235,7 @@ async def process_source_code_files(file_path: str, ParentID: str, reponame: str
 
     file_structure = await read_and_parse(file_path, file_id)
     if file_structure:
+        file_structure = f"{file_structure}"
         pinecone.load_text_to_pinecone(file_path, file_id, file_structure)
 
 async def process_documentation_files(file_path: str, ParentID: str, reponame: str):

@@ -201,13 +201,43 @@ def read_file_contents(file_path):
     except Exception as e:
         return f"Error reading file: {str(e)}"
 
-def add_chat_message(text, is_user=True):
-    """Add a message to the chat history"""
-    st.session_state.chat_messages.append({
-        'text': text,
-        'is_user': is_user,
-        'timestamp': datetime.now().strftime("%H:%M:%S")
-    })
+def add_chat_message(text, is_user=True, result_obj=None):
+    """
+    Add a message to the chat history
+    
+    Parameters:
+    - text (str): The message text
+    - is_user (bool): Whether the message is from the user or bot
+    - result_obj (FinalResult, optional): Structured result object for bot responses
+    """
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    
+    if is_user:
+        # For user messages, just add the text
+        st.session_state.chat_messages.append({
+            'text': text,
+            'is_user': True,
+            'timestamp': timestamp
+        })
+    else:
+        if result_obj:
+            # For bot messages with structured data, store each field separately
+            st.session_state.chat_messages.append({
+                'is_user': False,
+                'timestamp': timestamp,
+                'knowledge': result_obj.knowledge,
+                'insights': result_obj.insights,
+                'code': result_obj.code,
+                'is_structured': True
+            })
+        else:
+            # For regular bot messages without structured data
+            st.session_state.chat_messages.append({
+                'text': text,
+                'is_user': False,
+                'timestamp': timestamp,
+                'is_structured': False
+            })
 
 def search_issues():
     """Filter issues based on search query"""
@@ -304,11 +334,11 @@ def show_repo_page():
                         st.write(f"Created: {issue.get('created_at', 'N/A')} | State: {issue.get('state', 'N/A')} | Comments: {issue.get('comments', 0)}")
                         st.markdown("---")
                 
-                # Display selected issue details
                 if st.session_state.selected_issue:
                     st.markdown("### ISSUE DETAILS")
                     issue_num = st.session_state.selected_issue['number']
                     issue_title = st.session_state.selected_issue['title']
+                    issue_description = st.session_state.selected_issue.get('body', 'No description provided.')
                     
                     # Display issue number and title
                     st.markdown(f"## #{issue_num} - {issue_title}")
@@ -318,10 +348,55 @@ def show_repo_page():
                     st.markdown(f"**Status:** {st.session_state.selected_issue.get('state', 'Unknown')}")
                     st.markdown(f"**Created at:** {st.session_state.selected_issue.get('created_at', 'Unknown')}")
                     st.markdown(f"**Updated at:** {st.session_state.selected_issue.get('updated_at', 'Unknown')}")
-                    
-                    # Issue body
                     st.markdown("### Description")
-                    st.markdown(st.session_state.selected_issue.get('body', 'No description provided.'))
+                    st.markdown(issue_description)
+                    
+                    if st.button("Ask Chatbot About This Issue"):
+                        issue_prompt = f"{issue_title}: {issue_description}"
+                        add_chat_message(issue_prompt)
+                        try:
+                            llm_response = requests.post(
+                                "http://127.0.0.1:3000/chat/", 
+                                json={
+                                    "query": issue_prompt
+                                }
+                            )
+                            
+                            if llm_response.status_code == 200:
+                                response_data = llm_response.json()
+                                
+                                # Check if response has structured format
+                                if isinstance(response_data.get("response"), dict) and all(key in response_data["response"] for key in ["knowledge", "insights", "code"]):
+                                    # Create FinalResult object
+                                    from pydantic import BaseModel, Field
+                                    
+                                    class FinalResult(BaseModel):
+                                        knowledge: str = Field(description="the knowledge for the given query")
+                                        insights: str = Field(description="the insights for the given query")
+                                        code: str = Field(description="the code for the given query")
+                                    
+                                    result_obj = FinalResult(
+                                        knowledge=response_data["response"]["knowledge"],
+                                        insights=response_data["response"]["insights"],
+                                        code=response_data["response"]["code"]
+                                    )
+                                    
+                                    # Add structured message
+                                    add_chat_message("", is_user=False, result_obj=result_obj)
+                                else:
+                                    # Handle regular text response
+                                    bot_message = response_data.get("response", "No response from server")
+                                    add_chat_message(bot_message, is_user=False)
+                            else:
+                                bot_message = f"Error communicating with the server. Status code: {llm_response.status_code}"
+                                add_chat_message(bot_message, is_user=False)
+                        except Exception as e:
+                            bot_message = f"Server error: {str(e)}"
+                            add_chat_message(bot_message, is_user=False)
+                        
+                        # Trigger a rerun to update the UI
+                        st.session_state.active_tab = 2
+                        st.experimental_rerun()
             else:
                 if st.session_state.issue_search:
                     st.info(f"No issues found matching '{st.session_state.issue_search}'. Clear search to view all issues.")
@@ -348,51 +423,104 @@ def show_repo_page():
         
         with tab3:
             st.markdown("### CHAT BOT")
-            
-            # Display chat messages
             chat_container = st.container()
             with chat_container:
                 for msg in st.session_state.chat_messages:
-                    align = "right" if msg['is_user'] else "left"
-                    bg_color = "#32475b" if msg['is_user'] else "#2c2c2c"
-                    st.markdown(
-                        f"<div style='text-align: {align};'>"
-                        f"<div style='display: inline-block; background-color: {bg_color}; padding: 8px 12px; border-radius: 15px; margin: 5px 0;'>"
-                        f"<small>{msg['timestamp']}</small><br>"
-                        f"{msg['text']}</div></div>",
-                        unsafe_allow_html=True
-                    )
+                    if msg['is_user']:
+                        # User message (right-aligned)
+                        st.markdown(
+                            f"<div style='text-align: right;'>"
+                            f"<div style='display: inline-block; background-color: #32475b; padding: 8px 12px; border-radius: 15px; margin: 5px 0;'>"
+                            f"<small>{msg['timestamp']}</small><br>"
+                            f"{msg['text']}</div></div>",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        # Bot message (left-aligned)
+                        if msg.get('is_structured', False):
+                            # Display structured response in separate boxes
+                            st.markdown(
+                                f"<div style='text-align: left;'>"
+                                f"<div style='display: inline-block; background-color: #2c2c2c; padding: 8px 12px; border-radius: 15px; margin: 5px 0; width: 90%;'>"
+                                f"<small>{msg['timestamp']}</small></div></div>",
+                                unsafe_allow_html=True
+                            )
+                            
+                            # Knowledge box
+                            with st.expander("Knowledge", expanded=True):
+                                st.markdown(
+                                    f"<div style='background-color: #1e3a5f; padding: 10px; border-radius: 8px;'>{msg['knowledge']}</div>",
+                                    unsafe_allow_html=True
+                                )
+                            
+                            # Insights box
+                            with st.expander("Insights", expanded=True):
+                                st.markdown(
+                                    f"<div style='background-color: #3a5f1e; padding: 10px; border-radius: 8px;'>{msg['insights']}</div>",
+                                    unsafe_allow_html=True
+                                )
+                            
+                            # Code box
+                            with st.expander("Code", expanded=True):
+                                st.code(msg['code'], language="python")
+                        else:
+                            # Regular bot message
+                            st.markdown(
+                                f"<div style='text-align: left;'>"
+                                f"<div style='display: inline-block; background-color: #2c2c2c; padding: 8px 12px; border-radius: 15px; margin: 5px 0;'>"
+                                f"<small>{msg['timestamp']}</small><br>"
+                                f"{msg['text']}</div></div>",
+                                unsafe_allow_html=True
+                            )
             
             # Chat input area at the bottom
             user_input = st.text_input("input", key="chat_input", label_visibility="collapsed")
             col1, col2 = st.columns([6, 1])
             with col2:
+                # Inside your existing send_chat button handler
                 if st.button("→", key="send_chat"):
                     if user_input.strip():
                         add_chat_message(user_input)
-                        
-                        # Here you can integrate with your backend for LLM responses
                         try:
-                            # Example of calling your backend for LLM response
-                            # Change the endpoint as needed
+                            # Call your backend for LLM response
                             llm_response = requests.post(
                                 "http://127.0.0.1:3000/chat/", 
                                 json={
-                                    "message": user_input,
-                                    "repo_path": st.session_state.repo_data["local_path"],
-                                    "selected_file": st.session_state.selected_file,
-                                    "selected_issue": st.session_state.selected_issue
+                                    "query": user_input
                                 }
                             )
                             
                             if llm_response.status_code == 200:
-                                bot_message = llm_response.json().get("response", "No response from server")
+                                response_data = llm_response.json()
+                                
+                                # Check if response has structured format
+                                if isinstance(response_data.get("response"), dict) and all(key in response_data["response"] for key in ["knowledge", "insights", "code"]):
+                                    # Create FinalResult object
+                                    from pydantic import BaseModel, Field
+                                    
+                                    class FinalResult(BaseModel):
+                                        knowledge: str = Field(description="the knowledge for the given query")
+                                        insights: str = Field(description="the insights for the given query")
+                                        code: str = Field(description="the code for the given query")
+                                    
+                                    result_obj = FinalResult(
+                                        knowledge=response_data["response"]["knowledge"],
+                                        insights=response_data["response"]["insights"],
+                                        code=response_data["response"]["code"]
+                                    )
+                                    
+                                    # Add structured message
+                                    add_chat_message("", is_user=False, result_obj=result_obj)
+                                else:
+                                    # Handle regular text response
+                                    bot_message = response_data.get("response", "No response from server")
+                                    add_chat_message(bot_message, is_user=False)
                             else:
-                                bot_message = "Error communicating with the server."
+                                bot_message = f"Error communicating with the server. Status code: {llm_response.status_code}"
+                                add_chat_message(bot_message, is_user=False)
                         except Exception as e:
                             bot_message = f"Server error: {str(e)}"
-                            
-                        add_chat_message(bot_message, is_user=False)
+                            add_chat_message(bot_message, is_user=False)
                         
                         # Clear input
                         st.session_state.chat_input = ""

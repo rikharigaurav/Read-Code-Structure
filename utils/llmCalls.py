@@ -78,6 +78,7 @@ async def get_file_type(file_path_list: list[str], parentID: str, repoName: str)
                 Match the file to one of the categories above.
                 If the file is purely a log, cache, or temporary file with no architectural or logical relevance and doesn't belong to any above category, mark it as "ignore file."
                 Return the output in the specified JSON format.
+                ignore images, static and other non-text files.
 
             "Please return a valid JSON object with the following keys: Source_Code_Files, Testing_Files, Template_Files, Doc_Files, and ignore. Each key should map to either a string or a list of strings representing file paths. Do not include any extra text, explanations, or formatting outside of the JSON object."
             \n{format_instructions}\n{query}\n

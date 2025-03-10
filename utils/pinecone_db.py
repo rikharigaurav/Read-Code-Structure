@@ -132,14 +132,22 @@ class pineconeOperation:
 
 
     def retrieve_data_from_pincone(self, context):
-        vector_store = PineconeVectorStore(index=self.index_name, embedding=self.embeddings)
+        index = self.pc.Index(self.index_name)
+        print("Context to retrieve for ", context)
+        vector_store = PineconeVectorStore(
+            index=index,  
+            embedding=self.embeddings
+        )
 
+        # Create and use the retriever
         retriever = vector_store.as_retriever(
             search_type="similarity_score_threshold",
-            search_kwargs={"k": 1, "score_threshold": 0.7},
+            search_kwargs={"k": 3, "score_threshold": 0.1},
         )
+        
         result = retriever.invoke(context)
-
+        
+        
         return result
 
     def delete_index(self):

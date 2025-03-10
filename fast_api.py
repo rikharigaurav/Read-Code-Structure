@@ -3,13 +3,27 @@ from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
 from utils.L_graph import getFilesContext
-# from utils.llmCalls import llm_check
+from utils.query import process_query
 
 app = FastAPI()
+
 
 class data(BaseModel):
     repo_url: str    
     # docsUrl: str | None = None
+class query(BaseModel):
+    query: str
+
+@app.post('/chat/')
+async def chat(Body: query):
+    query = Body.query
+    # print(query)
+    response = process_query(query)
+    print(response)
+    return {
+        'status_code': 200,
+        'response': response
+    }
 
 @app.post("/github/")
 async def repo(Body: data):
@@ -21,13 +35,14 @@ async def repo(Body: data):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
         # fullPath = await clone_repository(repo_url, "./")
-        fullPath = 'Read-Code-Structure'
+        fullPath = 'rich.git'
         # print("Full system path for repo", fullPath)
         # Create a pinecone index
+        repoName = None
         if(fullPath):
             repoName = Path(fullPath).name
             print(repoName)
-            await getFilesContext(fullPath, repoName)
+            # await getFilesContext(fullPath, repoName)
         return {
             'status_code': 200,
             'localPath': repoName,

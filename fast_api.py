@@ -1,12 +1,26 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
 from utils.L_graph import getFilesContext
 from utils.query import process_query
+from fastapi.middleware.cors import CORSMiddleware
+import os
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],  # Ensure WebSocket headers are allowed
+)
 
+
+class DirectoryItem(BaseModel):
+    name: str
+    type: str
+    path: str
 
 class data(BaseModel):
     repo_url: str    
@@ -52,4 +66,35 @@ async def repo(Body: data):
     else:
         return {"repoUrl": "No repo url provided"}
 
-    
+@app.get("/directory")
+async def get_directory(path: str = None):
+    try:
+        # Validate and sanitize the path
+        print(path)
+        if not path:
+            path = os.getcwd()
+            
+        # Security check to prevent directory traversal
+        if not os.path.abspath(path).startswith(os.getcwd()):
+            raise HTTPException(status_code=400, detail="Invalid path")
+            
+        path_obj = Path(path)
+        
+        if not path_obj.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
+            
+        if not path_obj.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+
+        items = []
+        for item in path_obj.iterdir():
+            items.append({
+                "name": item.name,
+                "type": "directory" if item.is_dir() else "file",
+                "path": str(item.absolute())
+            })
+            
+        return items
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

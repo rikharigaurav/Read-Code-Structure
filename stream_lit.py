@@ -9,7 +9,7 @@ from datetime import datetime
 # Configure Streamlit page with dark theme
 st.set_page_config(page_title="GitHub Code Parser", layout="wide")
 
-# Apply custom CSS for dark theme
+# Apply custom CSS for dark theme with improved padding and scrolling
 st.markdown("""
 <style>
     .stApp {
@@ -27,20 +27,26 @@ st.markdown("""
         background-color: #990000;
         color: white;
     }
-    .folder-tree {
+    /* Improved container styling with better padding */
+    .folder-tree, .code-viewer, .chat-bot, .issue-container {
         background-color: #1e1e1e;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 15px;
+    }
+    /* Custom scrollable containers */
+    .scrollable-container {
+        max-height: 70vh;
+        overflow-y: auto;
         padding: 10px;
+        background-color: #1e1e1e;
         border-radius: 4px;
     }
-    .code-viewer {
-        background-color: #1e1e1e;
+    /* Improved file item styling */
+    .file-item {
+        padding: 5px;
         border-radius: 4px;
-        padding: 10px;
-    }
-    .chat-bot {
-        background-color: #1e1e1e;
-        border-radius: 4px;
-        padding: 10px;
+        margin-bottom: 2px;
     }
     .file-item:hover {
         background-color: #333333;
@@ -54,7 +60,7 @@ st.markdown("""
     .issue-card {
         background-color: #1e1e1e;
         border-radius: 4px;
-        padding: 10px;
+        padding: 15px;
         margin-bottom: 10px;
     }
     .issue-number {
@@ -63,7 +69,7 @@ st.markdown("""
     }
     .search-container {
         background-color: #1e1e1e;
-        padding: 10px;
+        padding: 15px;
         border-radius: 4px;
         margin-bottom: 15px;
     }
@@ -73,7 +79,7 @@ st.markdown("""
         color: white;
         border: none;
         border-radius: 4px;
-        padding: 10px;
+        padding: 12px;
         margin-bottom: 5px;
         cursor: pointer;
         width: 100%;
@@ -95,6 +101,79 @@ st.markdown("""
         border-radius: 4px;
         padding: 8px;
     }
+    /* Chat message styling with improved padding */
+    .chat-message {
+        padding: 12px;
+        margin: 8px 0;
+        border-radius: 15px;
+    }
+    .user-message {
+        background-color: #32475b;
+        text-align: right;
+        margin-left: 20%;
+    }
+    .bot-message {
+        background-color: #2c2c2c;
+        text-align: left;
+        margin-right: 20%;
+    }
+    /* Custom scrollbar for webkit browsers */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #1e1e1e;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #555;
+    }
+    /* Folder tree styles */
+    .tree-item {
+        padding: 5px;
+        border-radius: 4px;
+        margin: 2px 0;
+    }
+    .tree-folder {
+        cursor: pointer;
+        font-weight: bold;
+    }
+    .tree-file {
+        cursor: pointer;
+    }
+    .tree-folder:hover, .tree-file:hover {
+        background-color: #333333;
+    }
+    .tree-content {
+        margin-left: 15px;
+        border-left: 1px solid #444;
+        padding-left: 10px;
+    }
+    .col1, .col2, .col3 {
+        padding: 10px;
+        border-radius: 4px;
+        background-color: #1e1e1e;
+    }
+
+    .folder-container {
+        border: 1px solid #444;
+        padding: 15px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        background-color: #1e1e1e;
+    }
+
+    .issue-list-container {
+        border: 1px solid #444;
+        padding: 15px;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        background-color: #1e1e1e;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -113,6 +192,8 @@ if 'issue_search' not in st.session_state:
     st.session_state.issue_search = ""
 if 'filtered_issues' not in st.session_state:
     st.session_state.filtered_issues = []
+if 'folder_state' not in st.session_state:
+    st.session_state.folder_state = {}  # To track expanded/collapsed folder states
 
 def get_repo_issues(repo_url):
     """Get issues from GitHub repository"""
@@ -159,33 +240,33 @@ def handle_submit():
     except Exception as e:
         st.error(f"Error processing request: {str(e)}")
 
-def build_tree(root_dir: str) -> dict:
-    """Build a nested dictionary representing the file structure"""
-    tree = {}
-    for root, dirs, files in os.walk(root_dir):
-        # Get path relative to the root_dir
-        relative_path = os.path.relpath(root, root_dir)
-        if relative_path == ".":
-            relative_path = ""
-        
-        # Skip .git directory and other hidden folders
-        if '.git' in relative_path.split(os.sep):
-            continue
-        
-        # Navigate into the nested dictionary based on subfolder path
-        path_parts = relative_path.split(os.sep) if relative_path else []
-        current_dict = tree
-        for part in path_parts:
-            if part.startswith('.'):
+    def build_tree(root_dir: str) -> dict:
+        """Build a nested dictionary representing the file structure"""
+        tree = {}
+        for root, dirs, files in os.walk(root_dir):
+            # Get path relative to the root_dir
+            relative_path = os.path.relpath(root, root_dir)
+            if relative_path == ".":
+                relative_path = ""
+            
+            # Skip .git directory and other hidden folders
+            if '.git' in relative_path.split(os.sep):
                 continue
-            current_dict = current_dict.setdefault(part, {})
+            
+            # Navigate into the nested dictionary based on subfolder path
+            path_parts = relative_path.split(os.sep) if relative_path else []
+            current_dict = tree
+            for part in path_parts:
+                if part.startswith('.'):
+                    continue
+                current_dict = current_dict.setdefault(part, {})
+            
+            # Add files into the current_dict (skip hidden files)
+            for file in files:
+                if not file.startswith('.'):
+                    current_dict[file] = None
         
-        # Add files into the current_dict (skip hidden files)
-        for file in files:
-            if not file.startswith('.'):
-                current_dict[file] = None
-    
-    return tree
+        return tree
 
 def read_file_contents(file_path):
     """Read and return the contents of a file"""
@@ -256,6 +337,13 @@ def select_issue(issue):
     """Set the selected issue"""
     st.session_state.selected_issue = issue
 
+def toggle_folder(folder_path):
+    """Toggle folder expanded/collapsed state"""
+    if folder_path in st.session_state.folder_state:
+        st.session_state.folder_state[folder_path] = not st.session_state.folder_state[folder_path]
+    else:
+        st.session_state.folder_state[folder_path] = True
+
 def show_home_page():
     """Render home page"""
     st.title("GITHUB CODE PARSER")
@@ -267,38 +355,122 @@ def show_home_page():
                      placeholder="e.g., https://github.com/username/repo")
         st.button("SUBMIT", on_click=handle_submit)
 
-def display_tree_with_file_selection(tree: dict, path: str = "", local_path: str = ""):
-    """Display folder tree with clickable files"""
-    for key, value in sorted(tree.items(), key=lambda x: (isinstance(x[1], dict), x[0])):
-        if isinstance(value, dict):
-            # It's a directory
-            with st.expander(f"📂 {key}", expanded=False):
-                display_tree_with_file_selection(value, os.path.join(path, key), local_path)
-        else:
-            # It's a file
-            file_path = os.path.join(local_path, path, key)
-            if st.button(f"📄 {key}", key=f"file_{file_path}"):
-                st.session_state.selected_file = file_path
+def display_tree_recursive(tree, path="", local_path="", indent_level=0):
+    """
+    Display folder tree with collapsible folders and clickable files
+    """
+    # Sort items to display folders first, then files alphabetically
+    sorted_items = sorted(tree.items(), key=lambda x: (x[1] is None, x[0]))
+    
+    for key, value in sorted_items:
+        full_path = os.path.join(path, key)
+        file_path = os.path.join(local_path, full_path)
+        
+        if value is not None:  # It's a folder
+            folder_id = f"folder_{full_path.replace(os.sep, '_').replace(' ', '_')}"
+            is_expanded = st.session_state.folder_state.get(full_path, False)
+            
+            col1, col2 = st.columns([0.1, 0.9])
+            with col1:
+                st.markdown(f"{'📂' if is_expanded else '📁'}")
+            with col2:
+                if st.button(f"{key}", key=folder_id, use_container_width=True):
+                    toggle_folder(full_path)
+            
+            if is_expanded:
+                # Create indented container for nested content
+                with st.container():
+                    st.markdown('<div class="tree-content">', unsafe_allow_html=True)
+                    display_tree_recursive(value, full_path, local_path, indent_level + 1)
+                    st.markdown('</div>', unsafe_allow_html=True)
+        else:  # It's a file
+            file_id = f"file_{file_path.replace(os.sep, '_').replace(' ', '_')}"
+            
+            col1, col2 = st.columns([0.1, 0.9])
+            with col1:
+                st.markdown("📄")
+            with col2:
+                if st.button(f"{key}", key=file_id, use_container_width=True):
+                    st.session_state.selected_file = file_path
 
 def show_repo_page():
-    """Render repository view page with side-by-side layout"""
+    """Render repository view page with side-by-side layout and scrollable containers with fixed heights"""
     if not st.session_state.repo_data:
         st.session_state.page = 'home'
         return
+    
+    # Custom CSS for fixed-height scrollable containers
+    st.markdown("""
+    <style>
+        .fixed-height-container {
+            height: 600px;
+            overflow-y: auto;
+            border: 1px solid #444;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #0e1117;
+            margin-bottom: 15px;
+        }
+        
+        .folder-container {
+            height: 700px;
+            overflow-y: auto;
+            border: 1px solid #444;
+            border-radius: 5px;
+            padding: 10px;
+            background-color: #0e1117;
+        }
+        
+        .issue-card {
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #444;
+            border-radius: 5px;
+            background-color: #1e1e1e;
+        }
+        
+        .chat-message {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+        
+        .user-message {
+            background-color: #2e4057;
+            text-align: right;
+            margin-left: 20%;
+        }
+        
+        .bot-message {
+            background-color: #1e1e1e;
+            text-align: left;
+            margin-right: 20%;
+        }
+        
+        .search-container {
+            padding: 10px;
+            margin-bottom: 15px;
+            background-color: #1e1e1e;
+            border-radius: 5px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
     # Create two main columns for the layout
     col1, col2 = st.columns([1, 3])
     
     with col1:
-        # Always show FOLDER CONTENT on the left
         st.markdown("### FOLDER CONTENT")
+        # Create container with proper styling
         with st.container():
+            st.markdown('<div class="folder-container">', unsafe_allow_html=True)
             local_path = st.session_state.repo_data["local_path"]
             if local_path:
                 tree = build_tree(local_path)
-                display_tree_with_file_selection(tree, "", local_path)
+                display_tree_recursive(tree, "", local_path)
             else:
                 st.write("No local path found.")
+            st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
         # Tabs for ISSUES, CODE VIEWER, and CHAT BOT
@@ -307,32 +479,52 @@ def show_repo_page():
         with tab1:
             st.markdown("### REPOSITORY ISSUES")
             
-            # Add search container
+            # Add search container with improved padding
             with st.container():
+                st.markdown('<div class="search-container">', unsafe_allow_html=True)
                 col1, col2 = st.columns([5, 1])
                 with col1:
                     st.text_input("Search issues by title, content, or issue number", 
-                                  key="issue_search",
-                                  value=st.session_state.issue_search)
+                                    key="issue_search",
+                                    value=st.session_state.issue_search)
                 with col2:
                     if st.button("Search", key="search_button"):
                         search_issues()
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            # Display issues with improved styling
-            if st.session_state.filtered_issues:
-                for issue in st.session_state.filtered_issues:
-                    # Create a container for each issue
-                    with st.container():
-                        # Display issue number in red and title
-                        issue_text = f"#{issue['number']} - {issue['title']}"
-                        
-                        # Use a regular button with custom styling for issues
-                        if st.button(issue_text, key=f"issue_{issue['number']}"):
-                            select_issue(issue)
-                        
-                        # Display issue metadata (date, state, comments)
-                        st.write(f"Created: {issue.get('created_at', 'N/A')} | State: {issue.get('state', 'N/A')} | Comments: {issue.get('comments', 0)}")
-                        st.markdown("---")
+            # Use two separate columns for issues list and selected issue details
+            issue_col, detail_col = st.columns([1, 1])
+            
+            with issue_col:
+                st.markdown("### ISSUES LIST")
+                # Create container with proper styling
+                with st.container():
+                    st.markdown('<div class="issue-list-container">', unsafe_allow_html=True)
+                    
+                    if st.session_state.filtered_issues:
+                        for issue in st.session_state.filtered_issues:
+                            # Create a container for each issue with better padding
+                            st.markdown('<div class="issue-card">', unsafe_allow_html=True)
+                            
+                            # Display issue number in red and title
+                            issue_text = f"#{issue['number']} - {issue['title']}"
+                            
+                            # Use a regular button with custom styling for issues
+                            if st.button(issue_text, key=f"issue_{issue['number']}", use_container_width=True):
+                                select_issue(issue)
+                            
+                            # Display issue metadata (date, state, comments)
+                            st.write(f"Created: {issue.get('created_at', 'N/A')} | State: {issue.get('state', 'N/A')} | Comments: {issue.get('comments', 0)}")
+                            
+                            st.markdown('</div>', unsafe_allow_html=True)
+                    else:
+                        st.info("No issues found.")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+            
+            with detail_col:
+                # Create fixed-height scrollable container for issue details
+                st.markdown('<div class="fixed-height-container">', unsafe_allow_html=True)
                 
                 if st.session_state.selected_issue:
                     st.markdown("### ISSUE DETAILS")
@@ -343,7 +535,7 @@ def show_repo_page():
                     # Display issue number and title
                     st.markdown(f"## #{issue_num} - {issue_title}")
                     
-                    # Issue metadata
+                    # Issue metadata with improved spacing
                     st.markdown(f"**Created by:** {st.session_state.selected_issue.get('user', {}).get('login', 'Unknown')}")
                     st.markdown(f"**Status:** {st.session_state.selected_issue.get('state', 'Unknown')}")
                     st.markdown(f"**Created at:** {st.session_state.selected_issue.get('created_at', 'Unknown')}")
@@ -394,90 +586,116 @@ def show_repo_page():
                             bot_message = f"Server error: {str(e)}"
                             add_chat_message(bot_message, is_user=False)
                         
-                        # Trigger a rerun to update the UI
+                        # Switch to chat tab after sending message
                         st.session_state.active_tab = 2
                         st.experimental_rerun()
-            else:
-                if st.session_state.issue_search:
-                    st.info(f"No issues found matching '{st.session_state.issue_search}'. Clear search to view all issues.")
                 else:
-                    st.info("No issues found for this repository.")
+                    st.info("Select an issue to view details.")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
         
         with tab2:
             st.markdown("### CODE VIEWER")
-            if st.session_state.selected_file:
-                # Show the selected file name
-                file_name = os.path.basename(st.session_state.selected_file)
-                st.markdown(f"**Viewing: {file_name}**")
+            # Create container with proper styling
+            with st.container():
+                st.markdown('<div class="code-container">', unsafe_allow_html=True)
                 
-                # Display file content
-                file_content = read_file_contents(st.session_state.selected_file)
+                if st.session_state.selected_file:
+                    # Show the selected file name
+                    file_name = os.path.basename(st.session_state.selected_file)
+                    st.markdown(f"**Viewing: {file_name}**")
+                    
+                    # Display file content
+                    file_content = read_file_contents(st.session_state.selected_file)
+                    
+                    # Determine language for syntax highlighting
+                    extension = os.path.splitext(file_name)[1].lower()
+                    language = 'python' if extension == '.py' else 'javascript' if extension in ['.js', '.json'] else 'text'
+                    
+                    st.code(file_content, language=language)
+                else:
+                    st.info("Select a file from the folder tree to view its contents.")
                 
-                # Determine language for syntax highlighting
-                extension = os.path.splitext(file_name)[1].lower()
-                language = 'python' if extension == '.py' else 'javascript' if extension in ['.js', '.json'] else 'text'
-                
-                st.code(file_content, language=language)
-            else:
-                st.info("Select a file from the folder tree to view its contents.")
+                st.markdown('</div>', unsafe_allow_html=True)
         
         with tab3:
             st.markdown("### CHAT BOT")
+            
+            # Create fixed-height scrollable container for chat history
             chat_container = st.container()
             with chat_container:
+                st.markdown('<div class="fixed-height-container" id="chat-history">', unsafe_allow_html=True)
+                
                 for msg in st.session_state.chat_messages:
                     if msg['is_user']:
-                        # User message (right-aligned)
+                        # User message (right-aligned) with improved styling
                         st.markdown(
-                            f"<div style='text-align: right;'>"
-                            f"<div style='display: inline-block; background-color: #32475b; padding: 8px 12px; border-radius: 15px; margin: 5px 0;'>"
+                            f"<div class='chat-message user-message'>"
                             f"<small>{msg['timestamp']}</small><br>"
-                            f"{msg['text']}</div></div>",
+                            f"{msg['text']}</div>",
                             unsafe_allow_html=True
                         )
                     else:
-                        # Bot message (left-aligned)
+                        # Bot message (left-aligned) with improved styling
                         if msg.get('is_structured', False):
                             # Display structured response in separate boxes
                             st.markdown(
-                                f"<div style='text-align: left;'>"
-                                f"<div style='display: inline-block; background-color: #2c2c2c; padding: 8px 12px; border-radius: 15px; margin: 5px 0; width: 90%;'>"
-                                f"<small>{msg['timestamp']}</small></div></div>",
+                                f"<div class='chat-message bot-message'>"
+                                f"<small>{msg['timestamp']}</small>",
                                 unsafe_allow_html=True
                             )
                             
                             # Knowledge box
                             with st.expander("Knowledge", expanded=True):
                                 st.markdown(
-                                    f"<div style='background-color: #1e3a5f; padding: 10px; border-radius: 8px;'>{msg['knowledge']}</div>",
+                                    f"<div style='background-color: #1e3a5f; padding: 12px; border-radius: 8px;'>{msg['knowledge']}</div>",
                                     unsafe_allow_html=True
                                 )
                             
                             # Insights box
                             with st.expander("Insights", expanded=True):
                                 st.markdown(
-                                    f"<div style='background-color: #3a5f1e; padding: 10px; border-radius: 8px;'>{msg['insights']}</div>",
+                                    f"<div style='background-color: #3a5f1e; padding: 12px; border-radius: 8px;'>{msg['insights']}</div>",
                                     unsafe_allow_html=True
                                 )
                             
                             # Code box
                             with st.expander("Code", expanded=True):
                                 st.code(msg['code'], language="python")
+                            
+                            st.markdown("</div>", unsafe_allow_html=True)
                         else:
                             # Regular bot message
                             st.markdown(
-                                f"<div style='text-align: left;'>"
-                                f"<div style='display: inline-block; background-color: #2c2c2c; padding: 8px 12px; border-radius: 15px; margin: 5px 0;'>"
+                                f"<div class='chat-message bot-message'>"
                                 f"<small>{msg['timestamp']}</small><br>"
-                                f"{msg['text']}</div></div>",
+                                f"{msg['text']}</div>",
                                 unsafe_allow_html=True
                             )
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Auto scroll to bottom of chat using JavaScript
+                st.markdown("""
+                <script>
+                    function scrollToBottom() {
+                        const chatHistory = document.getElementById('chat-history');
+                        if (chatHistory) {
+                            chatHistory.scrollTop = chatHistory.scrollHeight;
+                        }
+                    }
+                    // Call immediately and after a slight delay to ensure content is loaded
+                    scrollToBottom();
+                    setTimeout(scrollToBottom, 100);
+                </script>
+                """, unsafe_allow_html=True)
             
-            # Chat input area at the bottom
-            user_input = st.text_input("input", key="chat_input", label_visibility="collapsed")
+            # Chat input area at the bottom with improved styling
+            st.markdown('<div style="background-color: #1e1e1e; padding: 15px; border-radius: 4px;">', unsafe_allow_html=True)
+            user_input = st.text_input("input", key="chat_input", label_visibility="collapsed", placeholder="Type your message here...")
             col1, col2 = st.columns([6, 1])
             with col2:
-                # Inside your existing send_chat button handler
+                # Send button
                 if st.button("→", key="send_chat"):
                     if user_input.strip():
                         add_chat_message(user_input)
@@ -525,6 +743,7 @@ def show_repo_page():
                         # Clear input
                         st.session_state.chat_input = ""
                         st.experimental_rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # Main app logic
 def main():

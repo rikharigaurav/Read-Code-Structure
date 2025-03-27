@@ -13,9 +13,7 @@ load_dotenv()
 class pineconeOperation:
     def __init__(self, index):
         self.pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-
-        self.embeddings = CohereEmbeddings(model="embed-english-v3.0")
-
+        self.embeddings = CohereEmbeddings(cohere_api_key=os.getenv('COHERE_API_KEY_1'),model="embed-english-v3.0")
         self.index_name = index
 
     def convert_to_serializable(self, data):

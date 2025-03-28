@@ -48,7 +48,7 @@ export default function ExplorerPage() {
         <ResizablePanel defaultSize={75}>
           <Tabs defaultValue='issues' className='h-screen flex flex-col'>
             <div className='px-4 m-3 pt-2 border-b '>
-              <TabsList className="flex justify-between">
+              <TabsList className='flex justify-between'>
                 <TabsTrigger value='issues'>Issues</TabsTrigger>
                 <TabsTrigger value='code'>Code Viewer</TabsTrigger>
                 <TabsTrigger value='chat'>Chat Bot</TabsTrigger>
@@ -60,8 +60,10 @@ export default function ExplorerPage() {
               <TabsContent value='issues' className='h-full'>
                 <IssuesList repoURL={repo} />
               </TabsContent>
-
-              <TabsContent value='code' className='h-full'>
+              <TabsContent
+                value='code'
+                className='h-full overflow-hidden' 
+              >
                 <CodeViewer file={selectedFile} />
               </TabsContent>
 

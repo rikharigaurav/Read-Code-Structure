@@ -49,7 +49,7 @@ async def repo(Body: data):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
         # fullPath = await clone_repository(repo_url, "./")
-        fullPath = 'rich.git'
+        fullPath = 'Read-Code-Structure.git'
         # print("Full system path for repo", fullPath)
         # Create a pinecone index
         repoName = None
@@ -98,3 +98,15 @@ async def get_directory(path: str = None):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/file")
+async def read_file(path: str):
+    try:
+        # print(path)
+        with open(path, 'r') as file:
+            return file.read()  
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")

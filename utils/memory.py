@@ -1,246 +1,233 @@
-from typing import TypedDict, List, Any
-from langgraph.graph import StateGraph, END
-from langchain.memory import ConversationBufferMemory
-from langgraph.checkpoint.sqlite import SqliteSaver
+from typing import Dict, List, Any, Optional, Union
 from transformers import AutoTokenizer
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
 import os
-from utils.tree import extract_imports
 
-chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+# Define schemas for the output structure
+class CodeAnalysis(BaseModel):
+    purpose: str = Field(description="One-line description of the code's purpose")
+    intuition: str = Field(description="Brief explanation of how the code works in a few lines")
+    properties: Dict[str, str] = Field(description="Key properties, parameters, or important aspects of the code")
 
-
-class TemplateMarkupFile(BaseModel):
-    summary: str = Field(description = "Summary of the current node")
-    file_type: str = Field(description="Template engine or markup language, such as HTML, Handlebars, EJS, or Pug")
-    dependencies: list[str] = Field(description="List of files or assets (images, stylesheets, scripts) linked or imported by the template")
-
-class DocumentationFile(BaseModel):
-    summary: str = Field(description = "Summary of the current node")
-    purpose: str = Field(description="The goal of the documentation, such as API documentation, user guide, or design document")
-
-class ProcessingState(TypedDict):
-    file_path: str
+class CodeChunk(BaseModel):
+    start_line: int
+    end_line: int
     content: str
-    fragments: List[str]
-    current_index: int
-    total_fragments: int
-    results: list[str]
-    memory: ConversationBufferMemory
-    prompt: str
-    fileSchema: Any
-    final_summary: dict
 
-# Define nodes
-def initialize_fragments(state: ProcessingState) -> dict:
-    """Node 1: Split content into fragments"""
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    tokens = tokenizer.encode(state["content"])
-    max_tokens = 4000
-    fragments = []
+def analyze_code(
+    code_content: str, 
+    file_structure: Optional[Dict[str, Any]] = None,
+    model_name: str = "mistralai/Mistral-7B-Instruct-v0.1",
+    max_chunk_tokens: int = 1024,
+    overlap_tokens: int = 100
+) -> CodeAnalysis:
+    chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     
-    for i in range(0, len(tokens), max_tokens):
-        fragment_tokens = tokens[i:i+max_tokens]
-        fragment = tokenizer.decode(fragment_tokens)
-        if i + max_tokens < len(tokens) and '.' in fragment:
-            fragment = fragment.rsplit('.', 1)[0] + '.'
-        fragments.append(fragment)
+    tokens = tokenizer.encode(code_content, add_special_tokens=False)
     
-    return {
-        "fragments": fragments,
-        "current_index": 0,
-        "results": [],
-        "total_fragments": len(fragments)
-    }
+    if len(tokens) <= max_chunk_tokens:
+        return _analyze_single_chunk(code_content, file_structure, chat)
+    else:
+        chunks = _chunk_code(code_content, tokenizer, max_chunk_tokens, overlap_tokens)
+        return _analyze_chunked_code(chunks, file_structure, chat)
 
-def process_fragment_node(state: ProcessingState) -> dict:
-    """Node 3: Process individual fragment with memory"""
-    current_index = state["current_index"]
-    fragment = state["fragments"][current_index]
-    total_fragments = state["total_fragments"]
-    prompt = state["prompt"]
-    memory = state["memory"]
-    fileSchema = state["fileSchema"]
-
-    # Construct input message
-    document_status = "[START]" if current_index == 0 else "[CONTINUED]"
-    document_end = "[END]" if current_index == total_fragments - 1 else "[MORE]"
-
-    # parser = JsonOutputParser(pydantic_object = )
-
-    prompt = PromptTemplate(
-        template='''
-        Fragment {current_index_plus_1}/{total_fragments} {document_status}
-        Prompt: {query}
-        Content:
-        {fragment}
-        {document_end}
+def _chunk_code(
+    code_content: str,
+    tokenizer,
+    max_tokens: int,
+    overlap: int
+) -> List[CodeChunk]:
+    """
+    Split code into overlapping chunks to preserve context.
+    """
+    lines = code_content.split('\n')
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
+    start_line = 0
+    
+    for i, line in enumerate(lines):
+        line_tokens = len(tokenizer.encode(line, add_special_tokens=False))
         
-        Instructions:
-        - Maintain context between fragments
-        - Prepare for potential continuation
-        - Delay final conclusions until last fragment
-        ''',
-        input_variables = [
-            'current_index_plus_1',
-            'total_fragments',
-            'document_status',
-            'fragment',
-            'document_end',
-            'query'
-        ]
-        # partial_variables={"format_instructions": parser.get_format_instructions()}
-    )
-
-    chain = prompt | chat  # | parser
-
-# Usage example
-    response = chain.invoke({
-        'current_index_plus_1': current_index + 1,
-        'total_fragments': total_fragments,
-        'document_status': document_status,
-        'fragment': fragment,
-        'document_end': document_end,
-        'query': prompt
-    })
-    
-    # Update memory
-    memory.save_context({"input": prompt}, {"output": response.json()})
-    
-    # Store result
-    new_results = state["results"] + [response]
-
-    return {
-        "results": new_results,
-        "current_index": current_index + 1,
-        "memory": memory
-    }
-
-def generate_summary(state: ProcessingState) -> dict:
-    """Node 3: Generate final summary using accumulated memory"""
-    # Get conversation history from memory
-    history = state["memory"].load_memory_variables({})
-    chat_history = "\n".join(
-        f"Input: {entry['input']}\nOutput: {entry['output']}"
-        for entry in history['history']
-    )
-    parser = JsonOutputParser(pydantic_object=state['fileSchema'])
-
-    import_statement = extract_imports(state['file_path'])
-    
-    summary_prompt = PromptTemplate(
-        template='''
-        Analyze and synthesize fragments into structured summary:
+        if current_tokens + line_tokens > max_tokens and current_chunk:
+            chunks.append(CodeChunk(
+                start_line=start_line,
+                end_line=i-1,
+                content='\n'.join(current_chunk)
+            ))
+            
+            # Calculate overlap for the next chunk
+            overlap_lines = []
+            overlap_tokens_count = 0
+            for prev_line in reversed(current_chunk):
+                prev_line_tokens = len(tokenizer.encode(prev_line, add_special_tokens=False))
+                if overlap_tokens_count + prev_line_tokens <= overlap:
+                    overlap_lines.insert(0, prev_line)
+                    overlap_tokens_count += prev_line_tokens
+                else:
+                    break
+            
+            current_chunk = overlap_lines
+            current_tokens = overlap_tokens_count
+            start_line = i - len(overlap_lines)
         
-        File Type Context: {file_type_hint}
-        Analysis Fragments:
-        {chat_history}
+        current_chunk.append(line)
+        current_tokens += line_tokens
 
-        The import statement for the file are
-        {import_statement}
+    if current_chunk:
+        chunks.append(CodeChunk(
+            start_line=start_line,
+            end_line=len(lines)-1,
+            content='\n'.join(current_chunk)
+        ))
+    
+    return chunks
+
+def _analyze_single_chunk(
+    code_content: str,
+    file_structure: Optional[Dict[str, Any]],
+    llm
+) -> CodeAnalysis:
+    """
+    Analyze a single chunk of code using the LLM.
+    """
+    parser = PydanticOutputParser(pydantic_object=CodeAnalysis)
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are an expert code analyst with deep understanding of software architecture, design patterns, and programming languages.
+        Analyze the given code thoroughly to extract:
+        1. Its core purpose (one clear sentence)
+        2. An intuitive explanation of how it works (3-5 sentences)
+        3. Key properties, parameters, and important aspects
         
-        Create JSON summary with fields matching the file type:
+        Focus on the big picture first, then drill down to specific details.
+        If code is part of a larger structure (provided), consider that context.
+        
+        Return your analysis in the specified JSON format."""),
+        ("user", """
+        Code to analyze:
+        ```
+        {code_content}
+        ```
+        
+        {file_structure_context}
+        
         {format_instructions}
-        
-        Examples:
-        - Graph File:
-            {{"file_type": "graph", "summary": "...", "format": "DOT"}}
-            
-            - Test File: 
-            {{"file_type": "test", "summary": "...", 
-                "test_framework": ["Jest"], 
-                "test_reference_dict": {{"unit": ["UserService"]}}}}
-                
-            - Template File:
-            {{"file_type": "template", "summary": "...", 
-                "template_engine": "Handlebars",
-                "dependencies": ["styles.css", "header.partial"]}}
-            
-        Validation Rules:
-        - Include ONLY fields relevant to the file type
-        - Maintain strict typing for each field
-        - Omit unused optional fields
-        ''',
-        input_variables=["chat_history", "file_type_hint"],
-        partial_variables={
-            "format_instructions": parser.get_format_instructions()
-        }
-    )
-
-    # Get file type hint from processing state
-    file_type_hint = state['fileSchema']
+        """)
+    ])
     
-    chain = summary_prompt | chat | parser
-    summary = chain.invoke({
-        "chat_history": chat_history,
-        "file_type_hint": file_type_hint,
-        "import_statement": import_statement
+    # Prepare file structure context if available
+    file_context = ""
+    if file_structure:
+        file_context = f"This code is part of a larger file structure: {file_structure}"
+    
+    # Run the chain
+    chain = prompt | llm | parser
+    return chain.invoke({
+        "code_content": code_content,
+        "file_structure_context": file_context,
+        "format_instructions": parser.get_format_instructions()
     })
+
+def _analyze_chunked_code(
+    chunks: List[CodeChunk],
+    file_structure: Optional[Dict[str, Any]],
+    llm
+) -> CodeAnalysis:
+    """
+    Analyze code that has been split into chunks, then synthesize the results.
+    """
+    # First, analyze each chunk individually
+    chunk_analyses = []
+    for i, chunk in enumerate(chunks):
+        parser = PydanticOutputParser(pydantic_object=CodeAnalysis)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are analyzing a CHUNK of code that is part of a larger code snippet.
+            Focus on understanding what this specific part does, but be aware it's incomplete.
+            
+            For this chunk, identify:
+            1. What this specific code section seems to do
+            2. How it fits into a larger codebase
+            3. Key variables, functions, or patterns you observe
+            
+            Be precise but tentative, as you're only seeing part of the code."""),
+            ("user", """
+            Code chunk {chunk_num}/{total_chunks}:
+            ```
+            {code_content}
+            ```
+            
+            Lines: {start_line} to {end_line}
+            
+            {file_structure_context}
+            
+            {format_instructions}
+            """)
+        ])
+        
+        file_context = ""
+        if file_structure:
+            file_context = f"This code is part of a larger file structure: {file_structure}"
+        
+        chain = prompt | llm | parser
+        analysis = chain.invoke({
+            "chunk_num": i+1,
+            "total_chunks": len(chunks),
+            "code_content": chunk.content,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "file_structure_context": file_context,
+            "format_instructions": parser.get_format_instructions()
+        })
+        
+        chunk_analyses.append(analysis)
     
-    return {"final_summary": summary.dict()}
-
-# Conditional edge logic
-def should_continue(state: ProcessingState) -> str:
-    """Determine if processing should continue"""
-    return "process" if state["current_index"] < state["total_fragments"] else END
-
-# Build the graph
-builder = StateGraph(ProcessingState)
-
-# Add nodes
-builder.add_node("initialize", initialize_fragments)
-builder.add_node("process", process_fragment_node)
-builder.add_node("summarize", generate_summary)  # New summary node
-
-# Set up edges
-builder.set_entry_point("initialize")
-builder.add_edge("initialize", "process")
-builder.add_conditional_edges(
-    "process",
-    should_continue,
-    {"process": "process", "summarize": "summarize"}
-)
-builder.add_edge("summarize", END)  # End after summary
-
-# Compile the graph (keep this unchanged)
-processing_graph = builder.compile(
-    checkpointer=SqliteSaver.from_conn_string(":memory:")  
-)
-
-# Updated file processing function
-def process_llm_calls(file_path: str, prompt: str, fileSchema: Any) -> List[dict]:
-    """Process file using LangGraph with memory"""
-    with open(file_path, 'r', encoding='utf-8') as file:
-        content = file.read()
-
-    # Initialize processing
-    initial_state = {
-        "file_path": file_path,
-        "content": content,
-        "prompt": prompt,
-        "fileSchema": fileSchema,
-        "memory": ConversationBufferMemory(),
-        "fragments": [],
-        "current_index": 0,
-        "results": [],
-        "total_fragments": 0
-    }
-
-    # Execute the graph
-    final_state = processing_graph.invoke(initial_state)
+    # Now synthesize the chunk analyses into a coherent whole
+    synthesizer_parser = PydanticOutputParser(pydantic_object=CodeAnalysis)
     
-    # Display results
-    for idx, result in enumerate(final_state["results"]):
-        print(f"\nFragment {idx+1} Summary:")
-        # print(result["summary"])
-        # print("-" * 40)
-
-    output = {
-        "result" : final_state['result'],
-        "prop" : final_state.get('final_summary')
-    }
+    synthesizer_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are synthesizing multiple analyses of code chunks into one coherent analysis.
+        Your task is to create a unified understanding of the entire code snippet based on analyses of its parts.
+        
+        Create:
+        1. A single clear purpose statement for the entire code
+        2. A concise intuitive explanation of the code's overall functionality
+        3. A consolidated list of important properties and parameters
+        
+        Be comprehensive but avoid redundancy. Prioritize information from all chunks.
+        Resolve any contradictions between chunk analyses by considering the broader context."""),
+        ("user", """
+        Individual chunk analyses:
+        
+        {chunk_analyses}
+        
+        {file_structure_context}
+        
+        {format_instructions}
+        """)
+    ])
     
-    return output
+    file_context = ""
+    if file_structure:
+        file_context = f"This code is part of a larger file structure: {file_structure}"
+    
+    # Format the chunk analyses for the prompt
+    analyses_text = "\n\n".join([
+        f"CHUNK {i+1}:\n" +
+        f"Purpose: {analysis.purpose}\n" +
+        f"Intuition: {analysis.intuition}\n" +
+        f"Properties: {analysis.properties}"
+        for i, analysis in enumerate(chunk_analyses)
+    ])
+    
+    chain = synthesizer_prompt | llm | synthesizer_parser
+    return chain.invoke({
+        "chunk_analyses": analyses_text,
+        "file_structure_context": file_context,
+        "format_instructions": synthesizer_parser.get_format_instructions()
+    })

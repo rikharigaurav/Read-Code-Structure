@@ -3,9 +3,10 @@ from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
 from utils.L_graph import getFilesContext
-from utils.query import process_query
+from utils.query import issue_solver
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import json
 
 app = FastAPI()
 app.add_middleware(
@@ -32,8 +33,8 @@ class query(BaseModel):
 async def chat(Body: query):
     query = Body.query
     # print(query)
-    response = process_query(query)
-    print(response)
+    response = issue_solver(query)
+    print(json.dumps(response.dict(), indent=2))
     return {
         'status_code': 200,
         'response': response
@@ -48,8 +49,8 @@ async def repo(Body: data):
     if(repo_url):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
-        # fullPath = await clone_repository(repo_url, "./")
-        fullPath = 'Read-Code-Structure.git'
+        fullPath = await clone_repository(repo_url, "./")
+        # fullPath = 'Read-Code-Structure.git'
         # print("Full system path for repo", fullPath)
         # Create a pinecone index
         repoName = None

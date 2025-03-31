@@ -1,6 +1,5 @@
 "use client";
-
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ResizablePanelGroup, ResizablePanel } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,8 +26,12 @@ export default function ExplorerPage() {
       setRepo(repoFromUrl)
     }
   }, [searchParams])
-  // console.log('localFilePath:', localFilePath)
-  // console.log('repo:', repo)
+
+  // Memoize the setSelectedFile callback to prevent unnecessary rerenders
+  const handleFileSelect = useCallback((file: string | null) => {
+    setSelectedFile(file)
+  }, [])
+
   return (
     <div className='h-screen bg-background'>
       <ResizablePanelGroup direction='horizontal'>
@@ -39,12 +42,14 @@ export default function ExplorerPage() {
             </div>
             <ScrollArea className='flex-1'>
               <div className='p-4'>
-                <FileTree onSelect={setSelectedFile} rootPath={localFilePath} />
+                <FileTree 
+                  onSelect={handleFileSelect} 
+                  rootPath={localFilePath} 
+                />
               </div>
             </ScrollArea>
           </div>
         </ResizablePanel>
-
         <ResizablePanel defaultSize={75}>
           <Tabs defaultValue='issues' className='h-screen flex flex-col'>
             <div className='px-4 m-3 pt-2 border-b '>
@@ -55,7 +60,6 @@ export default function ExplorerPage() {
                 <TabsTrigger value='neo4j'>CodeBase Graph</TabsTrigger>
               </TabsList>
             </div>
-
             <div className='flex-1 p-4'>
               <TabsContent value='issues' className='h-full'>
                 <IssuesList repoURL={repo} />
@@ -66,11 +70,9 @@ export default function ExplorerPage() {
               >
                 <CodeViewer file={selectedFile} />
               </TabsContent>
-
               <TabsContent value='chat' className='h-full'>
                 <ChatBot />
               </TabsContent>
-
               <TabsContent value='neo4j' className='h-full'>
                 <Neo4jGraph
                   uri={process.env.NEXT_PUBLIC_NEO4J_URI!}

@@ -1,383 +1,474 @@
-'use client'
+from typing_extensions import TypedDict
+import os
+from langgraph.graph import StateGraph, START, END
+from pydantic import BaseModel, Field, ValidationError, model_validator
+from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_core.output_parsers import JsonOutputParser
+from typing import Optional, List, Dict, Any, Literal
+from langgraph.graph import StateGraph
+from langchain.prompts import PromptTemplate
+from utils.pinecone_db import pinecone
+from langchain_neo4j import GraphCypherQAChain, Neo4jGraph
 
-import { useState, useEffect, useRef } from 'react'
-import {
-  ClickInteraction,
-  DragNodeInteraction,
-  ZoomInteraction,
-  PanInteraction,
-} from '@neo4j-nvl/interaction-handlers'
-import * as neo4j from 'neo4j-driver'
-import type {
-  Node as Neo4jNode,
-  Relationship as Neo4jRelationship,
-  Path as Neo4jPath,
-} from 'neo4j-driver'
-import { Play } from 'lucide-react'
-import { NVL, NvlOptions } from '@neo4j-nvl/base'
+class LangGraphState(TypedDict):
+    original_query: str 
+    subqueries: List[str]
+    decomposed_queries: List[Dict[str, Any]]
+    aggregated_data: List[Dict[str, Any]]
+    final_result: Optional[str]
 
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { ChevronUp, ChevronDown } from 'lucide-react'
-import { Node as node, Relationship as relstionship } from '@neo4j-nvl/base'
+class FinalResult(BaseModel):
+    knowledge: str = Field(description="the knowledge for the given query")
+    insights: str = Field(description="the insights for the given query")
+    code: str = Field(description="the code for the given query")
 
-interface Node {
-  id: string
-  caption: string
-  color?: string
-}
 
-interface Relationship {
-  id: string
-  from: string
-  to: string
-  caption: string
-}
+graph_builder = StateGraph(LangGraphState)
+llm = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+workflow = StateGraph(LangGraphState)
+graph = Neo4jGraph(url=os.getenv("NEO4J_URI"), username="neo4j", password=os.getenv("NEO4J_PASSWORD"))
 
-interface Neo4jGraphProps {
-  uri: string
-  user: string
-  password: string
-}
+class subqueries(BaseModel):
+    subqueries: list[str] = Field(description = "sub-query derived from the main query")
 
-// Predefined query templates
-const QUERY_TEMPLATES = [
-  {
-    label: 'Get All Relationships',
-    query: 'MATCH p=()-[]->() RETURN p LIMIT 25;',
-  },
-  {
-    label: 'Count Node Types',
-    query: 'MATCH (n) RETURN labels(n) as NodeType, count(*) as Count;',
-  },
-  {
-    label: 'Find Connected Nodes',
-    query: 'MATCH (a)-[r]->(b) RETURN a.name, type(r), b.name LIMIT 25;',
-  },
-  {
-    label: 'Shortest Paths',
-    query: 'MATCH p=shortestPath((a)-[*]-(b)) RETURN p LIMIT 5;',
-  },
-  {
-    label: 'Nodes with Most Connections',
-    query:
-      'MATCH (n)-[r]->() RETURN n, count(r) as connections ORDER BY connections DESC LIMIT 10;',
-  },
-]
-
-export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
-  const [queryInput, setQueryInput] = useState(
-    'MATCH p=()-[]->() RETURN p LIMIT 25;'
-  )
-  const [nodes, setNodes] = useState<Node[]>([])
-  const [relationships, setRelationships] = useState<Relationship[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isNodesOpen, setIsNodesOpen] = useState(true)
-  const [isRelationshipsOpen, setIsRelationshipsOpen] = useState(true)
-  const graphContainerRef = useRef<HTMLDivElement>(null)
-  const [nvlInstance, setNvlInstance] = useState<NVL | null>(null)
-
-  const getColorForLabel = (label: string): string => {
-    const colorMap: { [key: string]: string } = {
-      DataFile: '#FF6B6B',
-      DocumentationFile: '#4D8AF0',
-      Folder: '#6BCB77',
-      Function: '#845EC2',
-      ApiEndpoint: '#FF8066',
-      TemplateMarkupFile: '#FFB88C',
-      TestingFile: '#A5A5A5',
-    }
-    return colorMap[label] || '#CCCCCC'
-  }
-
-  const processNeo4jData = (records: neo4j.Record[]) => {
-    const nodesMap = new Map<string, Node>()
-    const relationshipsMap = new Map<string, Relationship>()
-
-    records.forEach((record: neo4j.Record) => {
-      const path = record.get('p') as Neo4jPath
-
-      path.segments.forEach(
-        (segment: {
-          start: Neo4jNode
-          end: Neo4jNode
-          relationship: Neo4jRelationship
-        }) => {
-          // Process start node
-          const startNode = segment.start
-          const startLabel = startNode.labels[0] || 'Unknown'
-          nodesMap.set(startNode.elementId, {
-            id: startNode.elementId,
-            caption: startLabel,
-            color: getColorForLabel(startLabel),
-          })
-
-          // Process relationship
-          const relationship = segment.relationship
-          relationshipsMap.set(relationship.elementId, {
-            id: relationship.elementId,
-            from: startNode.elementId,
-            to: segment.end.elementId,
-            caption: relationship.type,
-          })
-
-          // Process end node
-          const endNode = segment.end
-          const endLabel = endNode.labels[0] || 'Unknown'
-          nodesMap.set(endNode.elementId, {
-            id: endNode.elementId,
-            caption: endLabel,
-            color: getColorForLabel(endLabel),
-          })
-        }
-      )
-    })
-
-    return {
-      nodes: Array.from(nodesMap.values()),
-      relationships: Array.from(relationshipsMap.values()),
-    }
-  }
-
-  const handleRunQuery = async () => {
-    setIsLoading(true)
-    setError(null)
-    const driver = neo4j.driver(uri, neo4j.auth.basic(user, password))
-    const session = driver.session()
-
-    try {
-      const result = await session.run(queryInput)
-      const { nodes, relationships } = processNeo4jData(result.records)
-
-      console.log('Processed Nodes:')
-      console.log(JSON.stringify(nodes, null, 2))
-      console.log('Processed Relationships:')
-      console.log(JSON.stringify(relationships, null, 2))
-
-      setNodes(nodes)
-      setRelationships(relationships)
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : 'An unknown error occurred'
-      )
-      console.error('Query Error:', error)
-    } finally {
-      setIsLoading(false)
-      await session.close()
-      await driver.close()
-    }
-  }
-
-  // Handle selecting a predefined query template
-  const handleQueryTemplateSelect = (value: string) => {
-    const selectedTemplate = QUERY_TEMPLATES.find(
-      (template) => template.label === value
+class QueryDecomposition(BaseModel):
+    Query_Intent: str = Field(
+        description="The specific aspect of the original query to investigate",
+        example="Find all functions that call the payment gateway API"
     )
-    if (selectedTemplate) {
-      setQueryInput(selectedTemplate.query)
+    Target_Scope: dict[str, str] = Field(
+        description="Target focus with type and specifics",
+        example={
+            "type": "class|function|endpoint|file",
+            "name": "PaymentService",
+            "pattern": "api/gateways/*.py"
+        }
+    )
+    Operational_Type: Literal['vector', 'graph', 'hybrid'] = Field(
+        description="Determined search mechanism based on other properties",
+        example="graph"
+    )
+    context_requirements: list[str] = Field(
+        description="Additional context needed for execution",
+        example=["API response formats", "Error handling patterns"]
+    )
+
+class Decomposer(BaseModel):
+    list_subquery: list[QueryDecomposition]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_posts(cls, values: dict) -> dict:
+        posts = values.get("posts", [])
+        if not posts:
+            raise ValueError("The list of posts cannot be empty.")
+        if len(posts) > 100:
+            raise ValueError("Too many posts. The maximum allowed is 100.")
+        return values   
+    
+class context_output_structure(BaseModel):
+    sub_query_output : str = Field(description="The final output for the selective sub query")
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_output(cls, values: Dict) -> Dict:
+        output = values.get("sub_query_output", "")
+        if len(output) > 500:
+            raise ValueError("Output exceeds 500 character limit")
+        if output.count(".") > 4:
+            raise ValueError("Maximum 4 sentences allowed")
+        return values
+
+
+def create_subqueries(state):
+    """
+    Classify the intent of the query based on predefined categories.
+    """
+
+    prompt = '''
+        You are an expert assistant designed to analyze and process queries about large software codebases. Your task is to break down a given query into smaller, actionable sub-queries, each focusing on a specific task or aspect of the codebase. Ensure the sub-queries are:
+
+    1. **Detailed and Focused**: Each sub-query should address a single, well-defined task but still should be pretty explanatory, should convey its purpose clearly. 
+    2. **Hierarchical**: Sub-queries should represent logical steps needed to solve the main query.
+    3. **Relevant**: Sub-queries should target important areas like file relationships, dependencies, semantic analysis, or bug detection.
+    4. **Atmomicity**: Each sub-query should be self-contained and not dependent on other sub-queries.
+    5. **Actionable**: Each sub-query should be actionable and lead to a specific result or insight.
+
+    For example:
+    Query: "Find all the circular dependencies in the repository and suggest how to fix them."
+    Sub-queries:
+    1. Identify all dependencies in the repository.
+    2. Detect circular dependencies among them.
+    3. Analyze the circular dependencies and suggest ways to resolve them.
+
+    Now, process the following query and generate sub-queries:
+
+    Query: {query}
+
+    YOUR RESPONSE MUST BE VALID JSON in the following format only, with no additional text:
+                {{
+                    "subqueries": "sub-query derived from the main query"
+                }}
+
+    {format_instructions}
+    '''
+
+    parser = JsonOutputParser(pydantic_object = subqueries)
+    
+    prompt_and_parser = PromptTemplate(
+        template = prompt,
+        input_variables = ['query'],
+        partial_variables = {'format_instructions': parser.get_format_instructions()}
+    )
+    
+    chain = prompt_and_parser | llm | parser
+
+    result = chain.invoke({"query": state["original_query"]})
+    print(result)
+    return {"subqueries": result['subqueries']}
+
+
+def decompose_query(state):
+    """
+    Break down the normalized query into manageable subtasks for further processing.
+    """
+
+    prompt = '''
+        You are an expert assistant for analyzing codebases. Your task is to decompose a given sub-query into structured parts that will be used for precise database retrieval.
+        
+        IMPORTANT: The Query_Intent field will be used DIRECTLY for database retrieval, so it must be specific, concise, and contain all necessary search terms.
+        
+        For each sub-query, provide:
+        
+        1. **Query_Intent**: Write a precise, searchable description that includes:
+            - All relevant technical terms and keywords
+            - Specific naming patterns (if mentioned)
+            - Clear indication of what needs to be found
+            - The query intent should be capable enough to retrieve the required information from the database on its own so it must contains all important keywords.
+            - Example: "Find all HTTP error handling patterns in API endpoint controllers" instead of just "Look for error handling"
+        
+        2. **Target_Scope**: Define the specific part of the codebase to focus on:
+            - Be as specific as possible about file types, directories, or module names
+            - Include any mentioned patterns or naming conventions
+            - Specify class/function types where relevant
+            - The target_scope should be in context to Query_Intent
+        
+        3. **Operational_Type**: Determine which search mechanism is most appropriate:
+            - "vector" for semantic similarity and conceptual searches
+            - "graph" for relationship-based queries and dependency analysis
+            - "hybrid" for complex queries requiring both approaches
+            - **Additional Guideline:** Use "graph" if the sub-query is related to structural aspects of the codebase (e.g., file architecture, class hierarchies, dependency relationships) and "vector" if the sub-query involves retrieving conceptual or knowledge-based data from the codebase.
+    
+
+        4. **context_requirements**: List any additional context needed:
+            - Related code patterns
+            - Documentation references
+            - Configuration settings
+
+        Here is the sub-query to decompose:
+        "{sub_query}"
+
+        Return the response as a list of JSON objects using the following schema:
+        ```python
+        {{
+            "Query_Intent": "<Precise, database-ready search description>",
+            "Target_Scope": {{
+                "type": "<class|function|endpoint|file>",
+                "name": "<specific name or pattern>",
+                "pattern": "<file pattern or location>"
+            }},
+            "Operational_Type": "<vector|graph|hybrid>",
+            "context_requirements": ["<requirement1>", "<requirement2>"]
+        }}
+        {format_instructions}
+    '''
+
+    parser = JsonOutputParser(pydantic_object = Decomposer)
+    
+
+    prompt_and_parser = PromptTemplate(
+        template = prompt,
+        input_variables = ['sub_query'],
+        partial_variables = {'format_instructions': parser.get_format_instructions()}
+    )
+
+    chain = prompt_and_parser | llm | parser
+    result = chain.invoke({"sub_query": state["subqueries"]})
+    print(f"THE DECOMPOSED QUERIES ARE ::: {result}")
+    
+    return {"decomposed_queries": result}
+
+def vectorCalls(state):
+    """
+    Process all queries that need vector search and add results to aggregated_data.
+    """
+    results = []
+    for query in state["decomposed_queries"]:
+        # Only process queries with Operational_Type 'vector' or 'hybrid'
+        if query.get('Operational_Type') in ['vector', 'hybrid']:
+            # Use the Query_Intent directly for retrieval
+            print(f"THE QUERY INTENT IS ::: {query.get('Query_Intent')}")
+            retrieved_data = pinecone.retrieve_data_from_pincone(query.get('Query_Intent'))
+            print(f"THE RETRIEVED DATA IS ::: {retrieved_data}")
+            
+            parser = JsonOutputParser(pydantic_object=context_output_structure)
+            prompt_template = PromptTemplate(
+                template = """
+                Analyze the following code context to answer the query.
+                Query: {subquery}
+                target_scope: {Target_Scope}
+                context_requirements: {context_requirements}
+                Context: {retrieved_data}
+                Provide a concise response that directly addresses the query based on the given context and if context is not give provide an ans based on your knowledge and the target_scope and context_requirement.
+                NOTE :- DON'T PROVIDE CODE AS OUTPUT. IT SHOULD BE PROPER ENGLISH LANGUAGE SENTENCE.
+                 YOUR RESPONSE MUST BE VALID JSON in the following format only, with no additional text:
+                {{
+                    "sub_query_output": "Your detailed answer here"
+                }}
+                {format_instructions}
+                """,
+                input_variables = ['subquery', 'Target_Scope', 'context_requirements', 'retrieved_data'],
+                partial_variables = {"format_instructions": parser.get_format_instructions()}
+            )
+            
+            prompt_model = prompt_template | llm 
+            output = prompt_model.invoke({
+                "subquery": query.get('Query_Intent'),
+                "Target_Scope": query.get('Target_Scope'),
+                "context_requirements": query.get('context_requirements'),
+                "retrieved_data": retrieved_data
+            })
+            result = parser.invoke(output)
+            print(f'THE OUTPUT FOR VECTOR RETRIEVAL IS ::: {result}')
+            
+            results.append({
+                "subquery": query.get('Query_Intent'),
+                "source": "vector",
+                "result": "No result received from LLM" if result is None else result['sub_query_output'],
+                "target_scope": query.get('Target_Scope'),
+                "context_requirements": query.get('context_requirements')
+            })
+    
+    return {"aggregated_data": results}
+            
+def graphCalls(state):
+    """
+    Process queries with graph search based on their Operational_Type.
+    Takes the state containing decomposed_queries in the expected format.
+    Includes LLM processing similar to vector calls.
+    """ 
+    results = state.get("aggregated_data", [])  # Start with existing results from vector search
+    
+    # Access decomposed_queries directly from state
+    for query in state["decomposed_queries"]:
+        # Only process queries with Operational_Type 'graph' or 'hybrid'
+        if query.get('Operational_Type') in ['graph', 'hybrid']:
+            CYPHER_GENERATION_TEMPLATE = """Task: Generate a Cypher statement to query a code graph database.
+            Instructions:
+            - Use only the provided node types, relationships, and properties in the schema.
+            - Do not use any node types, relationships, or properties that are not provided in the schema.
+            - Return only the Cypher query with no additional explanation.
+
+            Schema:
+            Node Types and Properties:
+            1. FOLDER: {fullPath}
+            - Properties: None specified
+
+            2. SOURCECODEFILE: {file_path}:{file_extension}
+            - Properties: file_id, file_name, file_path, file_extension
+
+            3. TESTINGFILE: {fullPath}:{file_extension}
+            - Properties: file_id, file_name, fullPath, file_extension, result['test_framework'], test_reference_str
+            - Note: test_reference_str is a dictionary containing functions being tested by this test file
+
+            4. DOCUMENTATIONFILE: {file_path}:{file_extension}
+            - Properties: file_id, file_name, file_path, file_extension
+
+            5. TEMPLATEMARKUPFILE: {file_path}:{file_extension}
+            - Properties: file_id, file_name, file_path, file_extension
+
+            6. APIENDPOINT: {route}:{method_name.upper()}
+            - Properties: node_id, route, http_method
+
+            7. FUNCTION: {relative_file_path}:{func_name}
+            - Properties: node_id, func_name, file_path, return_type
+
+            Relationship Types:
+            1. BELONGS_TO - indicates which node belongs to (comes under) which node
+            2. HTTP_METHOD - connects between API calls
+            3. CALLS - used for function calling relationships
+
+            Note: Do not include any explanations or apologies in your responses.
+            Do not respond to any questions that might ask anything else than for you to construct a Cypher statement.
+            Do not include any text except the generated Cypher statement.
+
+            Examples:
+            # Find all Python source code files
+            MATCH (s:SOURCECODEFILE)
+            WHERE s.file_extension = 'py'
+            RETURN s.file_name, s.file_path
+
+            # Find functions that call other functions
+            MATCH (f1:FUNCTION)-[:CALLS]->(f2:FUNCTION)
+            RETURN f1.func_name AS caller, f2.func_name AS callee
+
+            # Find test files that test a specific function
+            MATCH (t:TESTINGFILE)-[:BELONGS_TO]->(f:FUNCTION)
+            WHERE f.func_name = 'process_data'
+            RETURN t.file_name
+
+            # Find all API endpoints and their HTTP methods
+            MATCH (a:APIENDPOINT)
+            RETURN a.route, a.http_method
+
+            # Find source code files in a specific folder
+            MATCH (f:FOLDER)<-[:BELONGS_TO]-(s:SOURCECODEFILE)
+            WHERE f.fullPath CONTAINS '/src/models'
+            RETURN s.file_name, s.file_path
+
+            The question is:
+            {question}"""
+
+            CYPHER_GENERATION_PROMPT = PromptTemplate(
+                input_variables=["question"], 
+                template=CYPHER_GENERATION_TEMPLATE
+            )
+            chain = GraphCypherQAChain.from_llm(
+                llm=llm,
+                graph=graph,
+                verbose=True,
+                validate_cypher=False,
+                allow_dangerous_requests=True,
+                cypher_prompt=CYPHER_GENERATION_PROMPT
+            )
+            
+            # Use the Query_Intent directly for the graph query
+            graph_response = chain.invoke({"query": query.get('Query_Intent')})
+            print(f"THE GRAPH RESPONSE IS ::: {graph_response}")
+            # Process the graph results with LLM (similar to vector call)
+            parser = JsonOutputParser(pydantic_object=context_output_structure)
+            prompt_template = PromptTemplate(
+                template = """
+                Analyze the following code context to answer the query.
+                Query: {subquery}
+                target_scope: {Target_Scope}
+                context_requirements: {context_requirements}
+                Context: {retrieved_data}
+                Provide a concise response that directly addresses the query based on the given context and if context is not give provide an ans based on your knowledge and the target_scope and context_requirement.
+                NOTE :- DON'T PROVIDE CODE AS OUTPUT. IT SHOULD BE PROPER ENGLISH LANGUAGE SENTENCE.
+                 YOUR RESPONSE MUST BE VALID JSON in the following format only, with no additional text:
+                {{
+                    "sub_query_output": "Your detailed answer here"
+                }}
+                """,
+                input_variables = ['subquery', 'Target_Scope', 'context_requirements', 'retrieved_data'],
+                partial_variables = {"format_instruction": parser.get_format_instruction()}
+            )
+            
+            prompt_model = prompt_template | llm | parser
+            output = prompt_model.invoke({
+                "subquery": query.get('Query_Intent'),
+                "Target_Scope": query.get('Target_Scope'),
+                "context_requirements": query.get('context_requirements'),
+                "graph_results": graph_response['result']
+            })
+            print(f'THE OUTPUT FOR GRAPH RETRIEVAL IS ::: {output}')
+            # result = output.sub_query_output if hasattr(output, 'sub_query_output') else output.get('sub_query_output', "No result found")
+            results.append({
+                "subquery": query.get('Query_Intent'),
+                "source": "graph",
+                "result": "No result received from LLM" if output is None else output['sub_query_output'],
+                "target_scope": query.get('Target_Scope'),
+                "context_requirements": query.get('context_requirements')
+            })
+    
+    return {"aggregated_data": results}
+
+def aggregateResults(state):
+    """
+    Aggregate all results from vector and graph searches into a final cohesive response.
+    """
+    aggregated_data = state.get("aggregated_data", [])
+    
+    if not aggregated_data:
+        return {"final_result": "No results were found for your query."}
+    parser = JsonOutputParser(pydantic_object=context_output_structure)
+    prompt = """
+    You're an expert code analysis assistant. You have received results from multiple search methods 
+    analyzing a codebase based on the original query: "{original_query}"
+    
+    Here are the results from different subqueries:
+    
+    {aggregated_results}
+    
+    Synthesize these findings into a comprehensive, cohesive response that directly addresses 
+    the original query. Organize your response according to the following structure:
+    
+    1. Knowledge: Provide a clear explanation and conclusion about the current issue based on the 
+       aggregated results. Focus on what the code does, how it works, and any problems identified.
+    
+    2. Insights: Identify 2-3 key insights that would help solve or understand the issue better.
+       These insights should point to specific functions, API endpoints, or files that are most 
+       relevant to the query. Be precise and actionable.
+    
+    3. Code: If possible, provide any relevant code snippets or examples based on the context
+       that would help address the original query. If no code can be provided based on the
+       available information, you may leave this section empty.
+
+       YOUR RESPONSE MUST BE VALID JSON with the following structure only:
+    {
+        "knowledge": "Clear explanation and conclusion about the current issue based on the aggregated results.",
+        "insights": "2-3 key insights pointing to specific functions, API endpoints, or files that are most relevant.",
+        "code": "Any relevant code snippets or examples that would help address the query. Leave empty if none available."
     }
-  }
+    
+    {format_instructions}
+    """
+    
+    # Format the aggregated results for the prompt
+    prompt_and_parser = PromptTemplate(
+        template = prompt,
+        input_variables = ['original_query', 'aggregated_results'],
+        partial_variables = {'format_instructions': parser.get_format_instructions()}
+    )
+    
+    chain = prompt_and_parser | llm | parser
+    result = chain.invoke({
+        "original_query": state["original_query"],
+        "aggregated_results": aggregated_data
+        })
+    print(f"THE DECOMPOSED QUERIES ARE ::: {result}")
 
-  // Get unique node types for the legend
-  const nodeTypes = Array.from(new Set(nodes.map((node) => node.caption)))
+    return {"final_result": result}
 
-  // Get unique relationship types for the legend
-  const relationshipTypes = Array.from(
-    new Set(relationships.map((rel) => rel.caption))
-  )
+# Build the workflow with sequential flow
+workflow.add_node("create_subqueries", create_subqueries)
+workflow.add_node("decompose_query", decompose_query)
+workflow.add_node("vectorCalls", vectorCalls)
+workflow.add_node("graphCalls", graphCalls)
+workflow.add_node("aggregateResults", aggregateResults)
 
-  useEffect(() => {
-    if (
-      graphContainerRef.current &&
-      nodes.length > 0 &&
-      relationships.length > 0
-    ) {
-      const options: NvlOptions = {
-        layout: 'forceDirected',
-      }
+# Set up sequential flow
+workflow.add_edge(START, "create_subqueries")
+workflow.add_edge("create_subqueries", "decompose_query")
+workflow.add_edge("decompose_query", "vectorCalls")
+workflow.add_edge("vectorCalls", "graphCalls")
+workflow.add_edge("graphCalls", "aggregateResults")
+workflow.add_edge("aggregateResults", END)
 
-      const nvl = new NVL(
-        graphContainerRef.current,
-        nodes,
-        relationships,
-        options
-      )
-      setNvlInstance(nvl)
+# Compile the workflow
+app = workflow.compile()
 
-      return () => {
-        nvl.destroy() 
-        setNvlInstance(null)
-      }
-    }
-  }, [nodes, relationships])
+# Example usage
+def process_query(query: str):
+    """Process a user query through the complete workflow."""
+    print(f"Processing query: {query}")
+    initial_state = {"original_query": query}
+    result = app.invoke(initial_state)
+    return result["final_result"]
 
-  useEffect(() => {
-
-    if (!nvlInstance) return
-    const clickInteraction = new ClickInteraction(nvlInstance)
-    const panInteraction = new PanInteraction(nvlInstance)
-    const dragNodeInteraction = new DragNodeInteraction(nvlInstance)
-    const zoomInteraction = new ZoomInteraction(nvlInstance)
-
-    clickInteraction.updateCallback('onNodeClick', (node: node) => {})
-    dragNodeInteraction.updateCallback('onDrag', (nodes) => {})
-    zoomInteraction.updateCallback('onZoom', (zoomLevel) => {})
-    panInteraction.updateCallback('onPan', (panning) => {})
-
-    return () => {
-      clickInteraction.destroy()
-      dragNodeInteraction.destroy()
-      zoomInteraction.destroy()
-      panInteraction.destroy()
-    }
-  }, [nvlInstance])
-
-  return (
-    <div className='w-full h-screen flex flex-col bg-gray-900 border-rounded-t-md'>
-      <div className='p-4 bg-gray-800 border-b border-gray-700 flex items-center gap-3 '>
-        <Select onValueChange={handleQueryTemplateSelect}>
-          <SelectTrigger className='w-[280px] bg-gray-700 text-gray-100'>
-            <SelectValue placeholder='Select Query Template' />
-          </SelectTrigger>
-          <SelectContent>
-            {QUERY_TEMPLATES.map((template, index) => (
-              <SelectItem key={index} value={template.label}>
-                {template.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <textarea
-          value={queryInput}
-          onChange={(e) => setQueryInput(e.target.value)}
-          rows={2}
-          className='flex-1 p-2 bg-gray-700 text-gray-100 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm'
-          placeholder='Enter Cypher query...'
-        />
-        <Button
-          onClick={handleRunQuery}
-          disabled={isLoading}
-          className='px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center'
-        >
-          {isLoading ? (
-            <div className='h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin'></div>
-          ) : (
-            <Play className='h-4 w-4' />
-          )}
-        </Button>
-      </div>
-      {error && (
-        <div
-          className='bg-red-900/50 border border-red-700 text-red-100 px-4 py-3 m-4 rounded-md'
-          role='alert'
-        >
-          <span className='block'>{error}</span>
-        </div>
-      )}
-      <div className='flex flex-1 overflow-hidden'>
-        <div
-          id='graph-container'
-          className='flex-1 overflow-auto'
-          style={{ height: 'calc(100vh - 200px)' }}
-          ref={graphContainerRef}
-        >
-          {nodes.length === 0 && (
-            <p className='text-gray-500 italic text-center p-4'>
-              Run a query to visualize the graph
-            </p>
-          )}
-        </div>
-
-        <div className='w-72 bg-gray-800 border-l border-gray-700 p-4 overflow-y-auto'>
-          <Collapsible
-            open={isNodesOpen}
-            onOpenChange={setIsNodesOpen}
-            className='mb-4'
-          >
-            <CollapsibleTrigger asChild>
-              <Button variant='ghost' className='w-full justify-between'>
-                <span>Node Types ({nodeTypes.length})</span>
-                {isNodesOpen ? (
-                  <ChevronUp className='h-4 w-4' />
-                ) : (
-                  <ChevronDown className='h-4 w-4' />
-                )}
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className='bg-gray-700 rounded-md p-3 border border-gray-600'>
-                {nodeTypes.length > 0 ? (
-                  <div className='grid grid-cols-1 gap-2'>
-                    {nodeTypes.map((type, index) => (
-                      <div key={index} className='flex items-center'>
-                        <div
-                          className='w-3 h-3 mr-2 rounded-full'
-                          style={{
-                            backgroundColor: getColorForLabel(type) as string,
-                          }}
-                        />
-                        <span className='text-gray-200 text-sm'>{type}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className='text-gray-400 text-sm italic'>
-                    No nodes to display
-                  </p>
-                )}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-
-          <Collapsible
-            open={isRelationshipsOpen}
-            onOpenChange={setIsRelationshipsOpen}
-            className='mb-4'
-          >
-            <CollapsibleTrigger asChild>
-              <Button variant='ghost' className='w-full justify-between'>
-                <span>Relationship Types ({relationshipTypes.length})</span>
-                {isRelationshipsOpen ? (
-                  <ChevronUp className='h-4 w-4' />
-                ) : (
-                  <ChevronDown className='h-4 w-4' />
-                )}
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className='bg-gray-700 rounded-md p-3 border border-gray-600'>
-                {relationshipTypes.length > 0 ? (
-                  <div className='grid grid-cols-1 gap-2'>
-                    {relationshipTypes.map((type, index) => (
-                      <div key={index} className='flex items-center'>
-                        <div className='w-8 h-[2px] mr-2 bg-blue-400'></div>
-                        <span className='text-gray-200 text-sm'>{type}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className='text-gray-400 text-sm italic'>
-                    No relationships to display
-                  </p>
-                )}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        </div>
-      </div>
-    </div>
-  )
-}
+# if __name__ == "__main__":
+#     sample_query = "Find all API endpoints that don't have proper error handling"
+#     result = process_query(sample_query)
+#     print("\nFinal Result:")
+#     print(result)

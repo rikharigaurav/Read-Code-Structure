@@ -12,6 +12,7 @@ from utils.neodb import app
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from utils.pinecone_db import pinecone
+from utils.memory import analyze_code
 
 
 load_dotenv()
@@ -86,15 +87,12 @@ def extract_imports(file_path):
             import_text = current_node.text.decode('utf8')
             imports.append(import_text)
 
-        # Traverse to the first child if possible
         if cursor.goto_first_child():
             continue
 
-        # If no child, try moving to the next sibling
         if cursor.goto_next_sibling():
             continue
 
-        # If no sibling, move up to the parent and check siblings
         retracing = True
         while retracing:
             if not cursor.goto_parent():
@@ -241,9 +239,10 @@ async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projec
         code = None
         with open(file_path, 'r') as f:
             code = f.read()
+        code_bytes = bytes(code, "utf8")
         PY_LANGUAGE = Language(tspython.language())
         parser = Parser(PY_LANGUAGE)
-        tree = parser.parse(bytes(code, "utf8"))
+        tree = parser.parse(code_bytes)
 
         if project_root:
             project_root = str(Path(file_path).parent)
@@ -255,21 +254,24 @@ async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projec
             parent_id=parent_id,
             level=1
         )
-        await traverse_tree(initial_state, imports, file_path, path_resolver, parent_id)
-
-        result = parse_tree(tree.root_node)
-        print('=============================')
-        print(f"the file structure is {result}")
+        allImports = extract_imports(file_path)
+        file_Structure = parse_tree(tree.root_node)
+        content_string += f"#File Structure Summary\n\n-##file path {file_path} \n\n## Code Structure\n\n{result}\n\n## Imports\n{allImports}\n\n##Code Parser \n"
+        updated_content_string = await traverse_tree(initial_state, imports, file_path, parent_id, code_bytes, content_string, file_Structure)
+        print("Updated content string:", updated_content_string)
+        pinecone.load_text_to_pinecone(content=updated_content_string, file_id=parent_id, file_structure=file_Structure)
+        # print('=============================')
+        # print(f"the file structure is {result}")
 
     except Exception as e:
         print(f"Parsing failed: {str(e)}")
 
-    return result
+    return file_Structure
         
 
 
-async def traverse_tree(initial_state: TraversalState, imports: dict, file_path: str, pathResolver: PathResolver, parent_id: str) -> List[Tuple[str, str, str]]:
-    """
+async def traverse_tree(initial_state: TraversalState, imports: dict, file_path: str, parent_id: str, file_content_bytes: bytes, content_string, file_Structure) -> List[Tuple[str, str, str]]:
+    """     
     Perform pre-order DFS traversal using a tree-sitter cursor.
     Returns a list of relationships (source_id, target_id, relationship_type)
     """
@@ -284,10 +286,11 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
         node = current_state.node
         parent_id = current_state.parent_id
         current_level = current_state.level
-
-        # debug_print_node(node, current_level)
-        # print(f"{'  ' * current_level}📍 Current state: level={current_level}, processed={current_state.processed}, parent_id={parent_id}")
-
+        
+        start_byte = node.start_byte
+        end_byte = node.end_byte
+        node_text = file_content_bytes[start_byte:end_byte].decode('utf8')
+        
         if current_state.processed:
             # print(f"{'  ' * current_level}⏭️  Skipping processed node")
             continue
@@ -367,8 +370,6 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                                 print(f"----------------------------> relation built {parent_id} --> {target_id}")
                                 pending_rels.add_relationship(parent_id, target_id, 'CALLS')
 
-
-
                 elif function_node and function_node.type == "identifier":
                         
                         called_func = get_called_function_name(node)
@@ -385,7 +386,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                             pending_rels.add_relationship(parent_id, target_id, 'CALLS')
 
             elif node.type == "decorated_definition":
-                # print(f"{'  ' * current_level}🎭 Processing decorated definition")
+                
                 function_node = None
                 for child in node.children:
                     if child.type == "function_definition":
@@ -427,13 +428,15 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                     node_id = f"APIENDPOINT:{route}:{http_method}"
                     # print(f"---------------------------->         node created {node_id}")
                     app.create_api_endpoint_node(node_id, route, http_method)
+
+                    result = await analyze_code(node_text, file_Structure)
+                    content_string += f"{node.type}\nPurpose: {result.purpose}\nIntuition: {result.intuition}\n{result.properties} \n route {route} method {http_method}\n\n"
                     # code: str = node.text.decode('utf8')  
                     # embedding =  pinecone.get_embeddings(code) 
                     # app.update_node_vector_format(node_id, embedding, 'APIEndpoint')
                     if parent_id:
                         # print(f"---------------------------->         relation built {node_id}  --> {current_state.parent_id}")
                         app.create_relation(node_id, parent_id, 'BELONGS_TO')
-
 
             elif node.type == 'function_definition':
                 func_name = node.child_by_field_name('name').text.decode('utf8')
@@ -445,6 +448,8 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 # print(f"{'  ' * current_level}📝 Processing function definition: {func_name} params: {params} return_type: {return_type} relative_path : {relative_file_path}")
                 # print(f"NODE ID : {node_id}")
                 app.create_function_node(node_id, func_name, file_path, return_type)
+                result = await analyze_code(node_text, file_Structure)
+                content_string += f"{node.type}\nPurpose: {result.purpose}\nIntuition: {result.intuition}\n{result.properties}"
                 # code: str = node.text.decode('utf8')  
                 # embedding = pinecone.get_embeddings(code)
                 # app.update_node_vector_format(node_id, embedding, 'Function')
@@ -455,9 +460,6 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 current_state.node_id = node_id
                 current_state.parent_id = fixed_parent_id
 
-
-        
-        # Push children onto the stack in reverse order to maintain pre-order traversal.
         cursor = node.walk()
         current_parent_id = current_state.parent_id
         child_level = current_level
@@ -466,13 +468,12 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
             # current_parent_id = current_node_id # or current_state.parent_id
                 child_level = current_level + 1
             # stack.append(current_state)
-            # Iterate over all children
             while True:
                 child_node = cursor.node
                 stack.append(TraversalState(child_node, parent_id=current_parent_id, level=child_level, processed=False))
                 if not cursor.goto_next_sibling():
                     break
-
+    return content_string
 
 def get_name(node):
     for child in node.children:
@@ -493,12 +494,11 @@ def parse_tree(root_node):
             name = get_name(current_node)
             body_node = get_body(current_node)
             if body_node:
-                # Process each statement in the body to find nested definitions
+                
                 for statement in body_node.children:
                     child_dict = traverse(statement)
                     current_dict.update(child_dict)
             if name:
-                # Use a tuple (node_type, name) as the key instead of a list
                 return {(current_node.type, name): current_dict}
             else:
                 return {}

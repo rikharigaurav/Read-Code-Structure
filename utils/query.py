@@ -3,7 +3,7 @@ import json
 from typing import List, Dict, Any, Optional, Literal, Union
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import MessageState
+# from langgraph.graph.message import MessageState
 from pydantic import BaseModel, Field, validator
 from langchain_mistralai import ChatMistralAI
 from langchain_pinecone import PineconeVectorStore
@@ -530,22 +530,21 @@ class IssueAnalyzer:
 
 # ============ LangGraph Flow ============
 
+# In utils/query.py, replace the build_issue_solver_graph function with:
+
 def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
     """Build the workflow graph for issue solving"""
     
     # Define the state graph
     workflow = StateGraph(IssueAnalyzerState)
     
-    # Define the nodes
-    
-    @workflow.node
+    # Define the nodes as functions first
     def analyze_issue(state: IssueAnalyzerState) -> IssueAnalyzerState:
         """Node for analyzing the issue text"""
         issue_text = state.get("issue_text", "")
         issue_metadata = analyzer.analyze_issue(issue_text)
         return {"issue_metadata": issue_metadata}
     
-    @workflow.node
     def create_subqueries(state: IssueAnalyzerState) -> IssueAnalyzerState:
         """Node for creating subqueries based on issue metadata"""
         issue_metadata = IssueAnalyzerState.get_issue_metadata(state)
@@ -555,7 +554,6 @@ def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
         subqueries = analyzer.create_subqueries(issue_metadata)
         return {"subqueries": subqueries}
     
-    @workflow.node
     def process_subqueries(state: IssueAnalyzerState) -> IssueAnalyzerState:
         """Node for processing all subqueries"""
         subqueries = IssueAnalyzerState.get_subqueries(state)
@@ -573,7 +571,6 @@ def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
             
         return {"search_results": search_results}
     
-    @workflow.node
     def generate_solution(state: IssueAnalyzerState) -> IssueAnalyzerState:
         """Node for generating the final solution"""
         issue_metadata = IssueAnalyzerState.get_issue_metadata(state)
@@ -585,7 +582,6 @@ def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
         solution = analyzer.generate_solution(issue_metadata, search_results)
         return {"solution": solution}
     
-    @workflow.node
     def format_output(state: IssueAnalyzerState) -> IssueAnalyzerState:
         """Node for formatting the final output"""
         solution = IssueAnalyzerState.get_solution(state)
@@ -595,15 +591,22 @@ def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
         # Already in the right format, just pass it through
         return {"final_output": solution}
     
+    # Add nodes to the graph (using the appropriate API)
+    workflow.add_node("analyze_issue", analyze_issue)
+    workflow.add_node("create_subqueries", create_subqueries)
+    workflow.add_node("process_subqueries", process_subqueries)
+    workflow.add_node("generate_solution", generate_solution)
+    workflow.add_node("format_output", format_output)
+    
     # Build the graph edges
-    workflow.add_edge(analyze_issue, create_subqueries)
-    workflow.add_edge(create_subqueries, process_subqueries)
-    workflow.add_edge(process_subqueries, generate_solution)
-    workflow.add_edge(generate_solution, format_output)
-    workflow.add_edge(format_output, END)
+    workflow.add_edge("analyze_issue", "create_subqueries")
+    workflow.add_edge("create_subqueries", "process_subqueries")
+    workflow.add_edge("process_subqueries", "generate_solution")
+    workflow.add_edge("generate_solution", "format_output")
+    workflow.add_edge("format_output", END)
     
     # Set the entry point
-    workflow.set_entry_point(analyze_issue)
+    workflow.set_entry_point("analyze_issue")
     
     return workflow
 
@@ -671,47 +674,47 @@ def create_issue_solver(
     return solve_issue
 
 # Example usage
-if __name__ == "__main__":
+# if __name__ == "__main__":
     # Set up environment variables
-    neo4j_uri = os.environ.get("NEO4J_URI")
-    neo4j_username = os.environ.get("NEO4J_USERNAME")
-    neo4j_password = os.environ.get("NEO4J_PASSWORD")
-    pinecone_api_key = os.environ.get("PINECONE_API_KEY")
-    pinecone_index = os.environ.get("PINECONE_INDEX")
+    # neo4j_uri = os.environ.get("NEO4J_URI")
+    # neo4j_username = os.environ.get("NEO4J_USERNAME")
+    # neo4j_password = os.environ.get("NEO4J_PASSWORD")
+    # pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+    # pinecone_index = os.environ.get("PINECONE_INDEX")
     
-    # Create the issue solver
-    issue_solver = create_issue_solver(
-        neo4j_uri=neo4j_uri,
-        neo4j_username=neo4j_username,
-        neo4j_password=neo4j_password,
-        pinecone_api_key=pinecone_api_key,
-        pinecone_index=pinecone_index
-    )
+    # # Create the issue solver
+    # issue_solver = create_issue_solver(
+    #     neo4j_uri=neo4j_uri,
+    #     neo4j_username=neo4j_username,
+    #     neo4j_password=neo4j_password,
+    #     pinecone_api_key=pinecone_api_key,
+    #     pinecone_index=pinecone_index
+    # )
     
-    # Example issue text
-    example_issue = """
-    Title: API returning 500 error on pagination request
+    # # Example issue text
+    # example_issue = """
+    # Title: API returning 500 error on pagination request
     
-    Description:
-    When trying to paginate through search results using the search API, it works for the first 3 pages but then returns a 500 error on page 4 and beyond.
+    # Description:
+    # When trying to paginate through search results using the search API, it works for the first 3 pages but then returns a 500 error on page 4 and beyond.
     
-    Steps to reproduce:
-    1. Call GET /api/search?q=test
-    2. Get the first page of results
-    3. Follow the "next" link 3 times
-    4. Try to access the 4th page
+    # Steps to reproduce:
+    # 1. Call GET /api/search?q=test
+    # 2. Get the first page of results
+    # 3. Follow the "next" link 3 times
+    # 4. Try to access the 4th page
     
-    Expected behavior:
-    All pages should return results with 200 OK
+    # Expected behavior:
+    # All pages should return results with 200 OK
     
-    Actual behavior:
-    Pages 1-3 work fine, but page 4 returns a 500 Internal Server Error
+    # Actual behavior:
+    # Pages 1-3 work fine, but page 4 returns a 500 Internal Server Error
     
-    Error message from logs:
-    "RangeError: Maximum call stack size exceeded at Object.paginate (/src/utils/pagination.js:42:19)"
+    # Error message from logs:
+    # "RangeError: Maximum call stack size exceeded at Object.paginate (/src/utils/pagination.js:42:19)"
     
-    Environment:
-    Production server
-    API version: 2.3.1
-    """
+    # Environment:
+    # Production server
+    # API version: 2.3.1
+    # """
     

@@ -2,13 +2,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
-from utils.L_graph import getFilesContext
-from utils.query import issue_solver
+from typing import Dict, Any
+from utils.query import create_issue_solver
 from fastapi.middleware.cors import CORSMiddleware
+
 import os
 import json
 
-app = FastAPI()
+app = FastAPI(title="Issue Solver API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -26,20 +27,57 @@ class DirectoryItem(BaseModel):
 class data(BaseModel):
     repo_url: str    
     # docsUrl: str | None = None
-class query(BaseModel):
+class QueryRequest(BaseModel):
     query: str
 
-@app.post('/chat/')
-async def chat(Body: query):
-    query = Body.query
-    # print(query)
-    response = issue_solver(query)
-    print(json.dumps(response.dict(), indent=2))
-    return {
-        'status_code': 200,
-        'response': response
-    }
+# Define the response model
+class QueryResponse(BaseModel):
+    status_code: int
+    response: Dict[str, Any]
 
+# Initialize the issue_solver at startup
+neo4j_uri = os.environ.get("NEO4J_URI")
+neo4j_username = os.environ.get("NEO4J_USERNAME")
+neo4j_password = os.environ.get("NEO4J_PASSWORD")
+pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+pinecone_index = os.environ.get("PINECONE_INDEX")
+
+# Create the issue solver instance
+issue_solver = create_issue_solver(
+    neo4j_uri=neo4j_uri,
+    neo4j_username=neo4j_username,
+    neo4j_password=neo4j_password,
+    pinecone_api_key=pinecone_api_key,
+    pinecone_index=pinecone_index
+)
+
+@app.post('/chat/', response_model=QueryResponse)
+async def chat(body: QueryRequest):
+    try:
+        # Extract query from request body
+        query = body.query
+        
+        # Call the issue solver with the query
+        response = issue_solver(query)
+        
+        # Log the response if needed
+        print(json.dumps(response.dict(), indent=2))
+        
+        # Return successful response
+        return {
+            'status_code': 200,
+            'response': response
+        }
+    except Exception as e:
+        # Log the error
+        print(f"Error processing query: {str(e)}")
+        
+        # Raise HTTP exception
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process query: {str(e)}"
+        )
+    
 @app.post("/github/")
 async def repo(Body: data):
     repo_url = Body.repo_url

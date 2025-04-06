@@ -221,8 +221,7 @@ async def process_test_files(fullPath: str, ParentID: str, REPONAME: str):
                 references_ID = f"FUNCTION:{function_file_path}:{key}"
                 pending_rels.add_relationship(file_id, references_ID, 'TESTS')
 
-    pinecone.load_text_to_pinecone(fullPath, file_id)
-
+    pinecone.load_text_to_pinecone(file_path = file_path, file_id= file_id, file_structure= file_structure)
     # print("node and relation has been created between test file and relative nodes")
 
 
@@ -237,7 +236,7 @@ async def process_source_code_files(file_path: str, ParentID: str, reponame: str
     file_structure = await read_and_parse(file_path, file_id)
     if file_structure:
         file_structure = f"{file_structure}"
-        pinecone.load_text_to_pinecone(file_path, file_id, file_structure)
+        pinecone.load_text_to_pinecone(file_path = file_path, file_id= file_id, file_structure= file_structure)
 
 async def process_documentation_files(file_path: str, ParentID: str, reponame: str):
     file_extension = Path(file_path).suffix.lstrip('.')
@@ -247,7 +246,7 @@ async def process_documentation_files(file_path: str, ParentID: str, reponame: s
     app.create_documentation_file_node(file_id, file_name, file_path, file_extension)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
-    pinecone.load_text_to_pinecone(file_path, file_id)
+    pinecone.load_text_to_pinecone(file_path = file_path, file_id= file_id, file_structure= file_structure)
 
 async def process_template_files(file_path: str, ParentID: str, reponame: str):
     file_extension = Path(file_path).suffix.lstrip('.')
@@ -257,5 +256,5 @@ async def process_template_files(file_path: str, ParentID: str, reponame: str):
     app.create_template_markup_file_node(file_id, file_name, file_path, file_extension)
     app.create_relation(file_id, ParentID, "BELONGS_TO")
 
-    pinecone.load_text_to_pinecone(file_path, file_id)
+    pinecone.load_text_to_pinecone(file_path = file_path, file_id= file_id, file_structure= file_structure)
     

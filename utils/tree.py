@@ -3,7 +3,7 @@ from utils.pending_rela import pending_rels
 import sys
 import tree_sitter_python as tspython
 from tree_sitter import Language, Parser, Node
-import re
+import re   
 from typing import List, Tuple
 from pathlib import Path
 from dataclasses import dataclass
@@ -12,7 +12,8 @@ from utils.neodb import app
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from utils.pinecone_db import pinecone
-from utils.memory import analyze_code
+from utils.memory import analyze_code, generate_file_metadata
+from langchain_mistralai import ChatMistralAI
 
 
 load_dotenv()
@@ -32,35 +33,43 @@ class PathResolver:
         self.project_root = Path(project_root).resolve()
 
     def get_relative_path(self, absolute_path: str) -> str:
-        abs_path = Path(absolute_path).resolve()
+        print(f"Debug: absolute_path={absolute_path}")
+        print(f"Debug: project_root={self.project_root}")
+        
         try:
-            # Get relative path to project root
-            rel_path = abs_path.relative_to(self.project_root)
+            abs_path = Path(absolute_path).resolve()
+            print(f"Debug: resolved_abs_path={abs_path}")
             
-            # Convert path components to list
-            parts = list(rel_path.parts)
+            # Split the path into components
+            parts = list(abs_path.parts)
             
-            if not parts:
-                return ""
+            # Find "task_manager.git" in the path
+            task_manager_index = -1
+            for i, part in enumerate(parts):
+                if part == "task_manager.git":
+                    task_manager_index = i
+                    break
             
-            # Remove "Read-Code-Structure" from parts if it exists
-            if parts and parts[0] == "Read-Code-Structure":
-                parts = parts[1:]
-                
-            # If no parts left after removal
-            if not parts:
-                return ""
-                
+            # Take only what's after task_manager.git
+            if task_manager_index != -1 and task_manager_index + 1 < len(parts):
+                filtered_parts = parts[task_manager_index + 1:]
+            else:
+                # If we can't find task_manager.git, just use the filename
+                filtered_parts = [abs_path.name]
+            
             # Remove file extension from last component
-            filename = parts[-1]
-            parts[-1] = Path(filename).stem
-            
+            if filtered_parts:
+                filename = filtered_parts[-1]
+                filtered_parts[-1] = Path(filename).stem
+                
             # Join with dots and return
-            return ".".join(parts)
-            
-        except ValueError:
-            return ""  # Path is outside project root
-
+            result = ".".join(filtered_parts)
+            print(f"Final relative path: {result}")
+            return result
+                
+        except Exception as e:
+            print(f"Unexpected error in get_relative_path: {e}")
+            return abs_path.stem  
     # def resolve_import(self, import_path: str, current_file: str) -> str:
     #     current_dir = Path(current_file).parent
     #     return str((current_dir / import_path.replace('.', '/')).with_suffix('.py'))
@@ -105,15 +114,49 @@ def extract_imports(file_path):
 
 
 async def extract_string_value(node):
-    if node.type in {"string", "string_literal"}:
-        # Handle concatenated strings and f-strings
-        if node.child_count > 0:
-            return "".join([
-                c.text.decode("utf8") for c in node.children
-                if c.type in {"string_content", "escape_sequence"}
-            ])
-        return node.text.decode("utf8").strip("\"'")
-    return None
+    """
+    Extract string value from various types of string nodes.
+    Handles string literals, f-strings, formatted strings, and concatenated strings.
+    
+    Args:
+        node: A tree-sitter node representing a string or similar expression
+        
+    Returns:
+        str: The extracted string value, or None if extraction fails
+    """
+    try:
+        # Direct string literals
+        if node.type in {"string", "string_literal"}:
+            # Handle concatenated strings and f-strings
+            if node.child_count > 0:
+                parts = []
+                for child in node.children:
+                    if child.type in {"string_content", "escape_sequence", "formatted_string_content"}:
+                        parts.append(child.text.decode("utf8"))
+                return "".join(parts)
+            return node.text.decode("utf8").strip("\"'")
+            
+        # Handle f-strings and formatted strings
+        elif node.type in {"formatted_string", "f_string"}:
+            # Extract content from formatted string
+            parts = []
+            for child in node.children:
+                if child.type in {"string_content", "formatted_string_content"}:
+                    parts.append(child.text.decode("utf8"))
+            return "".join(parts)
+            
+        # Handle variables that might contain URLs
+        elif node.type == "identifier":
+            # Just return the variable name for logging purposes
+            var_name = node.text.decode("utf8")
+            print(f"Variable reference found: {var_name} (cannot extract actual value)")
+            return f"VAR:{var_name}"
+            
+        print(f"Unhandled node type in extract_string_value: {node.type}")
+        return None
+    except Exception as e:
+        print(f"Error extracting string value: {e}")
+        return None
 
 
 def get_function_arguments(function_node):
@@ -233,9 +276,10 @@ def get_imports(code: str):
     # print(result_dict)
     return result_dict
             
-async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projectROOT')):
+async def read_and_parse(file_path, parent_id, project_root = os.getenv('projectROOT')):
     result = None
     try:
+        print("reading parsing is started ----------------------------")
         code = None
         with open(file_path, 'r') as f:
             code = f.read()
@@ -256,10 +300,42 @@ async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projec
         )
         allImports = extract_imports(file_path)
         file_Structure = parse_tree(tree.root_node)
+
+        chat = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'))
+        conversation_history = []
+
+        content_string = ""
         content_string += f"#File Structure Summary\n\n-##file path {file_path} \n\n## Code Structure\n\n{result}\n\n## Imports\n{allImports}\n\n##Code Parser \n"
-        updated_content_string = await traverse_tree(initial_state, imports, file_path, parent_id, code_bytes, content_string, file_Structure)
-        print("Updated content string:", updated_content_string)
-        pinecone.load_text_to_pinecone(content=updated_content_string, file_id=parent_id, file_structure=file_Structure)
+        
+        
+        updated_content_string, updated_conversation_history = await traverse_tree(
+                initial_state, 
+                imports, 
+                file_path, 
+                parent_id, 
+                code_bytes, 
+                content_string, 
+                file_Structure,      
+                chat, 
+                conversation_history
+            )
+
+        file_metadata = generate_file_metadata(
+            file_path=file_path,
+            file_structure=file_Structure,
+            conversation_history=updated_conversation_history,
+            llm=chat
+        )
+
+        final_content_string = updated_content_string + f"\n\n## File Metadata\n{file_metadata}"
+        print("Updated content string with metadata:", final_content_string)
+
+        pinecone.load_text_to_pinecone(
+            content=final_content_string, 
+            file_id=parent_id, 
+            file_structure=file_Structure, 
+            metadata = file_metadata
+        )
         # print('=============================')
         # print(f"the file structure is {result}")
 
@@ -267,15 +343,23 @@ async def read_and_parse(file_path, parent_id,  project_root = os.getenv('projec
         print(f"Parsing failed: {str(e)}")
 
     return file_Structure
-        
 
 
-async def traverse_tree(initial_state: TraversalState, imports: dict, file_path: str, parent_id: str, file_content_bytes: bytes, content_string, file_Structure) -> List[Tuple[str, str, str]]:
+
+async def traverse_tree(
+        initial_state: TraversalState, 
+        imports: dict, 
+        file_path: str, 
+        parent_id: str, 
+        file_content_bytes: bytes, 
+        content_string, 
+        file_Structure
+    ) -> List[Tuple[str, str, str]]:
     """     
     Perform pre-order DFS traversal using a tree-sitter cursor.
     Returns a list of relationships (source_id, target_id, relationship_type)
     """
-
+    print("traversing is started ----------------------------")
 
     stack = [initial_state]
     print("🚀 Starting tree traversal...")
@@ -301,8 +385,8 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
         if current_level >= 2:
             if node.type == "call":
                 function_node = node.child_by_field_name("function")
-                # if function_node:
-                    # print(f"{'  ' * current_level}📞 Processing call node: {function_node.text.decode('utf8')}")
+                if function_node:
+                    print(f"{'  ' * current_level}📞 Processing call node: {function_node.text.decode('utf8')}")
                 
                 if function_node and function_node.type == "attribute":
                     method_name_node = function_node.child_by_field_name("attribute")
@@ -334,24 +418,48 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                                     else:
                                         positional_args.append(child)
 
-                                # Check positional arguments first
+                                # Route extraction from arguments
+                                route = None
+                                url_patterns = ["url", "route", "path", "endpoint"]
+
+                                # First check positional arguments (typically the first argument is the URL)
                                 for arg in positional_args:
                                     route = await extract_string_value(arg)
-                                    if route: 
+                                    if route:
+                                        print(f"Found route in positional argument: {route}")
                                         break
 
-                                # If no route found, check url keyword
-                                if not route and 'url' in keyword_args:
-                                    route = await extract_string_value(keyword_args['url'])
+                                # If no route found in positional args, check keyword arguments
+                                if not route:
+                                    # Check common URL-related keywords
+                                    for keyword in url_patterns:
+                                        if keyword in keyword_args:
+                                            route = await extract_string_value(keyword_args[keyword])
+                                            if route:
+                                                print(f"Found route in keyword argument '{keyword}': {route}")
+                                                break
 
-                                # Process found route
+                                # Process the found route
                                 if route:
-                                    route = route.strip("\"'")
-                                    parsed_url = urlparse(route)
-                                    route = parsed_url.path or route 
-                                    print("Extracted route:", route)
+                                    # Handle variable references specially
+                                    if isinstance(route, str) and route.startswith("VAR:"):
+                                        var_name = route[4:]  # Extract variable name
+                                        print(f"Route is a variable reference: {var_name}, using placeholder")
+                                        route = f"VARIABLE_REFERENCE:{var_name}"
+                                    else:
+                                        # Clean up the route
+                                        route = route.strip("\"'")
+                                        
+                                        # Handle full URLs by extracting just the path
+                                        if route.startswith(("http://", "https://", "www.")):
+                                            try:
+                                                parsed_url = urlparse(route)
+                                                route = parsed_url.path or route
+                                                print(f"Extracted path from URL: {route}")
+                                            except Exception as e:
+                                                print(f"Error parsing URL: {e}")
                                 else:
-                                    print("No literal route found for API call")
+                                    print("No route found for API call")
                                     route = "UNKNOWN_ROUTE"  # Fallback value
 
                                 target_id = f"APIENDPOINT:{route}:{method_name.upper()}"
@@ -386,7 +494,6 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                             pending_rels.add_relationship(parent_id, target_id, 'CALLS')
 
             elif node.type == "decorated_definition":
-                
                 function_node = None
                 for child in node.children:
                     if child.type == "function_definition":
@@ -395,7 +502,7 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                         break
 
                 if not function_node:
-                    return  # Skip if no function is found
+                    return content_string
 
                 func_name = None
                 if function_node.child_by_field_name("name"):
@@ -411,32 +518,70 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                     if child.type == "decorator":
                         decorator_text = child.text.decode("utf8")
                         decorators.append(decorator_text)
+                        print(f"Found decorator: {decorator_text}")
 
                         # Detect API decorator patterns
-                        if "@" in decorator_text and ("route" in decorator_text or "get" in decorator_text or "post" in decorator_text):
+                        if "@" in decorator_text and ("route" in decorator_text or any(method in decorator_text for method in ["get", "post", "put", "delete", "patch"])):
                             is_api = True
+                            
+                            # Extract HTTP method
                             method_match = re.search(r"@(\w+)\.(\w+)\(", decorator_text)
                             if method_match:
                                 http_method = method_match.group(2).upper()
-                            route_match = re.search(r'\("(.*?)"', decorator_text)
-                            if route_match:
-                                route = route_match.group(1)
+                                print(f"Detected HTTP method: {http_method}")
+                            else:
+                                # Try alternative method detection
+                                alt_method_patterns = [
+                                    r"methods=\[[\'\"](\w+)[\'\"]", # methods=["GET"]
+                                    r"methods=\([\'\"](\w+)[\'\"]", # methods=("GET")
+                                    r"method=[\'\"](\w+)[\'\"]"     # method="GET"
+                                ]
+                                for pattern in alt_method_patterns:
+                                    alt_match = re.search(pattern, decorator_text, re.IGNORECASE)
+                                    if alt_match:
+                                        http_method = alt_match.group(1).upper()
+                                        print(f"Detected HTTP method from methods parameter: {http_method}")
+                                        break
+                                
+                                # If still no method, use default based on decorator name
+                                if not http_method and "route" in decorator_text:
+                                    http_method = "GET"  # Default method for route
+                                    print(f"Using default HTTP method: {http_method}")
+                            
+                            # Try multiple route extraction patterns
+                            route_patterns = [
+                                r'\("([^"]*)"',           # Double quotes: @app.route("/path")
+                                r"\'([^']*)\'",           # Single quotes: @app.route('/path')
+                                r'@\w+\.\w+\(([^,\)\'"]+)', # No quotes: @app.route(/path)
+                                r'path=[\'\"]([^\'"]+)[\'\"]'  # path parameter: path="/users"
+                            ]
+                            
+                            for pattern in route_patterns:
+                                route_match = re.search(pattern, decorator_text)
+                                if route_match:
+                                    route = route_match.group(1)
+                                    print(f"Detected route: {route}")
+                                    break
 
-                # Store results
-                if is_api:
-                    # print(f"name: {func_name} http_method: {http_method}, route: {route}, decorators: {decorators}")
+                # Only create API endpoint if both route and http_method are valid
+                if is_api and route is not None and http_method is not None:
+                    print(f"Creating API endpoint - name: {func_name}, http_method: {http_method}, route: {route}")
                     node_id = f"APIENDPOINT:{route}:{http_method}"
-                    # print(f"---------------------------->         node created {node_id}")
-                    app.create_api_endpoint_node(node_id, route, http_method)
-
-                    result = await analyze_code(node_text, file_Structure)
-                    content_string += f"{node.type}\nPurpose: {result.purpose}\nIntuition: {result.intuition}\n{result.properties} \n route {route} method {http_method}\n\n"
-                    # code: str = node.text.decode('utf8')  
-                    # embedding =  pinecone.get_embeddings(code) 
-                    # app.update_node_vector_format(node_id, embedding, 'APIEndpoint')
-                    if parent_id:
-                        # print(f"---------------------------->         relation built {node_id}  --> {current_state.parent_id}")
-                        app.create_relation(node_id, parent_id, 'BELONGS_TO')
+                    print(f"---------------------------->         node created {node_id}")
+                    
+                    try:
+                        app.create_api_endpoint_node(node_id, route, http_method)
+                        result = analyze_code(node_text, file_Structure)
+                        content_string += f"{node.type}\nPurpose: {result.purpose}\nIntuition: {result.intuition}\n{result.properties} \n route {route} method {http_method}\n\n"
+                        
+                        # Create relation if parent_id exists
+                        if parent_id:
+                            app.create_relation(node_id, parent_id, 'BELONGS_TO')
+                            
+                    except Exception as e:
+                        print(f"Error creating API endpoint node: {e}")
+                elif is_api:
+                    print(f"Warning: Detected API decorator but couldn't extract both route ({route}) and HTTP method ({http_method})")
 
             elif node.type == 'function_definition':
                 func_name = node.child_by_field_name('name').text.decode('utf8')
@@ -446,19 +591,23 @@ async def traverse_tree(initial_state: TraversalState, imports: dict, file_path:
                 relative_file_path = relative_path.get_relative_path(file_path) 
                 node_id = f"FUNCTION:{relative_file_path}:{func_name}"
                 # print(f"{'  ' * current_level}📝 Processing function definition: {func_name} params: {params} return_type: {return_type} relative_path : {relative_file_path}")
-                # print(f"NODE ID : {node_id}")
-                app.create_function_node(node_id, func_name, file_path, return_type)
-                result = await analyze_code(node_text, file_Structure)
-                content_string += f"{node.type}\nPurpose: {result.purpose}\nIntuition: {result.intuition}\n{result.properties}"
-                # code: str = node.text.decode('utf8')  
-                # embedding = pinecone.get_embeddings(code)
-                # app.update_node_vector_format(node_id, embedding, 'Function')
-                fixed_parent_id = node_id
-                current_state.processed = True
-                if parent_id:
-                    app.create_relation(node_id, parent_id, 'BELONGS_TO')
-                current_state.node_id = node_id
-                current_state.parent_id = fixed_parent_id
+                print(f"NODE ID : {node_id}")
+                
+                try:
+                    app.create_function_node(node_id, func_name, file_path, return_type)
+                    result = analyze_code(node_text, file_Structure)
+                    content_string += f"{node.type}\nPurpose: {result.purpose}\nIntuition: {result.intuition}\n{result.properties}\n\n"
+                    # code: str = node.text.decode('utf8')  
+                    # embedding = pinecone.get_embeddings(code)
+                    # app.update_node_vector_format(node_id, embedding, 'Function')
+                    fixed_parent_id = node_id
+                    current_state.processed = True
+                    if parent_id:
+                        app.create_relation(node_id, parent_id, 'BELONGS_TO')
+                    current_state.node_id = node_id
+                    current_state.parent_id = fixed_parent_id
+                except Exception as e:
+                    print(f"Error creating function node: {e}")
 
         cursor = node.walk()
         current_parent_id = current_state.parent_id

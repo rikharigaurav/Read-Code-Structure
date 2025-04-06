@@ -1,27 +1,32 @@
 import os
 import json
-from typing import List, Dict, Any, Optional, Literal, Union
-from langchain_core.messages import HumanMessage, AIMessage
+from typing import List, Dict, Any, Optional, Literal
+from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, END
-# from langgraph.graph.message import MessageState
 from pydantic import BaseModel, Field, validator
 from langchain_mistralai import ChatMistralAI
 from langchain_pinecone import PineconeVectorStore
+from langchain_cohere import CohereEmbeddings
 from neo4j import GraphDatabase
 import logging
+import traceback
+import time
+from dotenv import load_dotenv
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+load_dotenv()
+
+# Set up logging with more detailed format
+logging.basicConfig(
+    level=logging.DEBUG,  
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
-
-# ============ Data Models ============
 
 class SubQuery(BaseModel):
     """A single subquery for issue investigation"""
     query_text: str = Field(..., description="The specific question or search intent")
     target_scope: str = Field(..., description="Code area to focus on (class, function, file, etc.)")
-    operation_type: Literal["vector", "graph", "hybrid"] = Field(..., 
-                     description="Type of search operation to perform")
+    operation_type: Literal["vector", "graph", "hybrid"] = Field(..., description="Type of search operation to perform")
     priority: int = Field(default=1, description="Priority order (1 being highest)")
 
 class IssueMetadata(BaseModel):
@@ -69,19 +74,27 @@ class IssueAnalyzerState(Dict[str, Any]):
     
     @classmethod
     def get_issue_metadata(cls, state: 'IssueAnalyzerState') -> Optional[IssueMetadata]:
-        return state.get("issue_metadata")
+        metadata = state.get("issue_metadata")
+        logger.debug(f"Retrieved issue_metadata from state: {metadata is not None}")
+        return metadata
     
     @classmethod
     def get_subqueries(cls, state: 'IssueAnalyzerState') -> List[SubQuery]:
-        return state.get("subqueries", [])
+        subqueries = state.get("subqueries", [])
+        logger.debug(f"Retrieved {len(subqueries)} subqueries from state")
+        return subqueries
     
     @classmethod
     def get_search_results(cls, state: 'IssueAnalyzerState') -> List[SearchResult]:
-        return state.get("search_results", [])
+        results = state.get("search_results", [])
+        logger.debug(f"Retrieved {len(results)} search results from state")
+        return results
     
     @classmethod
     def get_solution(cls, state: 'IssueAnalyzerState') -> Optional[SolutionOutput]:
-        return state.get("solution")
+        solution = state.get("solution")
+        logger.debug(f"Retrieved solution from state: {solution is not None}")
+        return solution
 
 # ============ Components ============
 
@@ -89,37 +102,58 @@ class IssueAnalyzer:
     """Components for analyzing and solving issues"""
     
     def __init__(self, 
-                 llm_model: str = "mistral/codestral-latest",
+                 llm_model: str = "codestral-latest",
                  neo4j_uri: str = None,
                  neo4j_username: str = None,
                  neo4j_password: str = None,
                  pinecone_api_key: str = None,
                  pinecone_index: str = None):
         
+        logger.info(f"Initializing IssueAnalyzer with model: {llm_model}")
+        
         # Initialize LLM
-        self.llm = ChatMistralAI(model=llm_model)
+        try:
+            self.llm = ChatMistralAI(api_key=os.getenv('MISTRAL_API_KEY'), model=llm_model)
+            logger.info("LLM initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
         
         # Initialize Neo4j
         self.neo4j_driver = None
         if neo4j_uri and neo4j_username and neo4j_password:
-            self.neo4j_driver = GraphDatabase.driver(
-                neo4j_uri, 
-                auth=(neo4j_username, neo4j_password)
-            )
+            try:
+                self.neo4j_driver = GraphDatabase.driver(
+                    neo4j_uri, 
+                    auth=(neo4j_username, neo4j_password)
+                )
+                logger.info("Neo4j driver initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Neo4j driver: {str(e)}")
+                logger.error(traceback.format_exc())
         
         # Initialize Pinecone
         self.vector_store = None
         if pinecone_api_key and pinecone_index:
-            import pinecone
-            pinecone.init(api_key=pinecone_api_key)
-            self.vector_store = PineconeVectorStore(index_name=pinecone_index)
+            try:
+                from pinecone import Pinecone
+                Pinecone(api_key=pinecone_api_key)
+                self.vector_store = PineconeVectorStore(index_name=pinecone_index, embedding=CohereEmbeddings(
+                    cohere_api_key=os.getenv("COHERE_API_KEY_3"),
+                    model="embed-english-v3.0"
+                ))
+                logger.info("Pinecone vector store initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize vector store: {str(e)}")
+                logger.error(traceback.format_exc())
             
     def run_vector_search(self, query: str, target_scope: str, limit: int = 5) -> List[CodeSnippet]:
         """Run vector search on the codebase"""
         logger.info(f"Running vector search for: {query} in scope: {target_scope}")
         
         if not self.vector_store:
-            logger.error("Vector store not initialized")
+            logger.warning("Vector store not initialized, returning empty results")
             return []
         
         # Add target scope to narrow down search
@@ -142,9 +176,11 @@ class IssueAnalyzer:
                         line_numbers=(metadata.get("start_line"), metadata.get("end_line"))
                     )
                 )
+            logger.info(f"Vector search returned {len(code_snippets)} snippets")
             return code_snippets
         except Exception as e:
             logger.error(f"Vector search error: {str(e)}")
+            logger.error(traceback.format_exc())
             return []
     
     def run_graph_query(self, query_intent: str, target_scope: str) -> List[RelationshipData]:
@@ -152,7 +188,7 @@ class IssueAnalyzer:
         logger.info(f"Running graph query for: {query_intent} in scope: {target_scope}")
         
         if not self.neo4j_driver:
-            logger.error("Neo4j driver not initialized")
+            logger.warning("Neo4j driver not initialized, returning empty results")
             return []
         
         # Generate appropriate Cypher query based on intent and scope
@@ -174,9 +210,11 @@ class IssueAnalyzer:
                         cypher_query=cypher_query
                     )
                     relationships.append(rel_data)
+                logger.info(f"Graph query returned {len(relationships)} relationships")
                 return relationships
         except Exception as e:
             logger.error(f"Graph query error: {str(e)}")
+            logger.error(traceback.format_exc())
             return []
     
     def _generate_cypher_query(self, query_intent: str, target_scope: str) -> str:
@@ -229,6 +267,7 @@ class IssueAnalyzer:
     def analyze_issue(self, issue_text: str) -> IssueMetadata:
         """Analyze issue text to extract structured metadata"""
         logger.info("Analyzing issue metadata")
+        logger.debug(f"Issue text length: {len(issue_text)}")
         
         prompt = f"""
         Analyze the following issue and extract structured metadata.
@@ -264,12 +303,21 @@ class IssueAnalyzer:
         """
         
         try:
+            logger.debug("Sending issue analysis prompt to LLM")
             response = self.llm.invoke([HumanMessage(content=prompt)])
+            logger.debug(f"Received response from LLM: {response.content[:100]}...")
+            
             metadata_json = self._extract_json_from_response(response.content)
-            return IssueMetadata(**metadata_json)
+            logger.debug(f"Extracted JSON: {json.dumps(metadata_json)[:100]}...")
+            
+            issue_metadata = IssueMetadata(**metadata_json)
+            logger.info(f"Successfully created IssueMetadata object with title: {issue_metadata.title}")
+            return issue_metadata
         except Exception as e:
             logger.error(f"Issue analysis error: {str(e)}")
+            logger.error(traceback.format_exc())
             # Return basic metadata if analysis fails
+            logger.warning("Falling back to basic metadata")
             return IssueMetadata(
                 title="Issue Analysis Failed",
                 description=issue_text[:200] + "..." if len(issue_text) > 200 else issue_text
@@ -313,12 +361,21 @@ class IssueAnalyzer:
         """
         
         try:
+            logger.debug("Sending subquery creation prompt to LLM")
             response = self.llm.invoke([HumanMessage(content=prompt)])
+            logger.debug(f"Received response from LLM: {response.content[:100]}...")
+            
             subqueries_json = self._extract_json_from_response(response.content)
-            return [SubQuery(**sq) for sq in subqueries_json]
+            logger.debug(f"Extracted JSON: {json.dumps(subqueries_json)[:100]}...")
+            
+            subqueries = [SubQuery(**sq) for sq in subqueries_json]
+            logger.info(f"Successfully created {len(subqueries)} SubQuery objects")
+            return subqueries
         except Exception as e:
             logger.error(f"Subquery creation error: {str(e)}")
+            logger.error(traceback.format_exc())
             # Return basic subquery if creation fails
+            logger.warning("Falling back to basic subquery")
             return [
                 SubQuery(
                     query_text=f"Find code related to {issue_metadata.title}",
@@ -366,10 +423,12 @@ class IssueAnalyzer:
             
             # Generate insight from search results
             result.insight = self._generate_insight_from_results(subquery, result)
+            logger.info(f"Completed processing subquery with insight length: {len(result.insight)}")
             return result
             
         except Exception as e:
             logger.error(f"Subquery processing error: {str(e)}")
+            logger.error(traceback.format_exc())
             # Return empty result with error message
             return SearchResult(
                 source_type=subquery.operation_type,
@@ -412,15 +471,19 @@ class IssueAnalyzer:
         """
         
         try:
+            logger.debug("Sending insight generation prompt to LLM")
             response = self.llm.invoke([HumanMessage(content=prompt)])
+            logger.debug(f"Received insight from LLM: {response.content[:100]}...")
             return response.content.strip()
         except Exception as e:
             logger.error(f"Insight generation error: {str(e)}")
+            logger.error(traceback.format_exc())
             return "Could not generate insight due to an error."
     
     def generate_solution(self, issue_metadata: IssueMetadata, search_results: List[SearchResult]) -> SolutionOutput:
         """Generate a comprehensive solution based on all search results"""
         logger.info("Generating solution from search results")
+        logger.debug(f"Working with {len(search_results)} search results")
         
         # Prepare context from all search results
         results_context = "\n\n".join([
@@ -487,16 +550,23 @@ class IssueAnalyzer:
         """
         
         try:
+            logger.debug("Sending solution generation prompt to LLM")
             response = self.llm.invoke([HumanMessage(content=prompt)])
+            logger.debug(f"Received solution from LLM: {response.content[:100]}...")
+            
             solution_json = self._extract_json_from_response(response.content)
+            logger.debug(f"Extracted solution JSON: {json.dumps(solution_json)[:100]}...")
             
             # Add visualization query if available
             if visualization_query and not solution_json.get("visualization_query"):
                 solution_json["visualization_query"] = visualization_query
                 
-            return SolutionOutput(**solution_json)
+            solution = SolutionOutput(**solution_json)
+            logger.info(f"Successfully created SolutionOutput with summary length: {len(solution.summary)}")
+            return solution
         except Exception as e:
             logger.error(f"Solution generation error: {str(e)}")
+            logger.error(traceback.format_exc())
             # Return basic solution if generation fails
             return SolutionOutput(
                 summary=f"Failed to generate complete solution due to error: {str(e)}",
@@ -508,6 +578,7 @@ class IssueAnalyzer:
     def _extract_json_from_response(self, text: str) -> Any:
         """Extract JSON from LLM response"""
         try:
+            logger.debug(f"Attempting to extract JSON from text of length {len(text)}")
             # Find JSON in the text (handling cases where LLM adds explanations)
             start_idx = text.find('{')
             end_idx = text.rfind('}')
@@ -516,82 +587,169 @@ class IssueAnalyzer:
                 # Try finding array instead
                 start_idx = text.find('[')
                 end_idx = text.rfind(']')
+            
+            logger.debug(f"JSON markers: start_idx={start_idx}, end_idx={end_idx}")
                 
             if start_idx != -1 and end_idx != -1:
                 json_str = text[start_idx:end_idx+1]
-                return json.loads(json_str)
+                logger.debug(f"Extracted JSON string of length {len(json_str)}")
+                parsed_json = json.loads(json_str)
+                logger.debug(f"Successfully parsed JSON object")
+                return parsed_json
             else:
                 # If no JSON structure found, attempt to parse the whole text
-                return json.loads(text)
+                logger.debug("No clear JSON markers found, attempting to parse entire text")
+                parsed_json = json.loads(text)
+                logger.debug(f"Successfully parsed entire text as JSON")
+                return parsed_json
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing error: {str(e)}")
-            logger.error(f"Problematic text: {text}")
+            logger.error(f"Problematic text: {text[:200]}...")
+            logger.error(traceback.format_exc())
             raise ValueError(f"Failed to parse JSON from response: {str(e)}")
 
 # ============ LangGraph Flow ============
 
-# In utils/query.py, replace the build_issue_solver_graph function with:
-
 def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
     """Build the workflow graph for issue solving"""
+    logger.info("Building issue solver workflow graph")
+    print("Entering build_issue_solver_graph")
     
-    # Define the state graph
-    workflow = StateGraph(IssueAnalyzerState)
+    class IssueWorkflowState(IssueAnalyzerState):   
+        issue_text: Optional[str] = None
+        issue_metadata: Optional[IssueMetadata] = None
+        subqueries: List[SubQuery] = []
+        search_results: List[SearchResult] = []
+        solution: Optional[SolutionOutput] = None
+        final_output: Optional[SolutionOutput] = None
+        error: Optional[str] = None
     
-    # Define the nodes as functions first
-    def analyze_issue(state: IssueAnalyzerState) -> IssueAnalyzerState:
+    # Define the state graph with the schema
+    workflow = StateGraph(IssueWorkflowState)
+    
+    # Define the nodes as functions
+    def analyze_issue(state: Dict[str, Any]) -> Dict[str, Any]:
         """Node for analyzing the issue text"""
+        logger.info("CHECKPOINT: Entering analyze_issue node")
+        
         issue_text = state.get("issue_text", "")
+        logger.debug(f"Retrieved issue_text from state, length: {len(issue_text)}")
+        print(f"Issue text exists: {bool(issue_text)}, length: {len(issue_text)}")
+        
+        if not issue_text:
+            logger.error("No issue text provided")
+            return {"error": "No issue text provided"}
+        
         issue_metadata = analyzer.analyze_issue(issue_text)
-        return {"issue_metadata": issue_metadata}
+        logger.debug(f"Created issue_metadata with title: {issue_metadata.title}")
+        
+        # Debug the state we're returning
+        result = {"issue_metadata": issue_metadata}
+        logger.debug(f"Returning from analyze_issue with keys: {list(result.keys())}")
+        print(f"analyze_issue returns: {list(result.keys())}")
+        
+        return result
     
-    def create_subqueries(state: IssueAnalyzerState) -> IssueAnalyzerState:
+    def create_subqueries(state: Dict[str, Any]) -> Dict[str, Any]:
         """Node for creating subqueries based on issue metadata"""
+        logger.info("CHECKPOINT: Entering create_subqueries node")
+        print("Entering create_subqueries")
+        
         issue_metadata = IssueAnalyzerState.get_issue_metadata(state)
         if not issue_metadata:
-            return {"error": "No issue metadata available"}
+            error_msg = "No issue metadata available"
+            logger.error(error_msg)
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+        
+        logger.debug(f"Retrieved issue_metadata with title: {issue_metadata.title}")
+        print(f"Issue metadata title: {issue_metadata.title}")
             
         subqueries = analyzer.create_subqueries(issue_metadata)
-        return {"subqueries": subqueries}
+        logger.debug(f"Created {len(subqueries)} subqueries")
+        
+        # Debug the state we're returning
+        result = {"subqueries": subqueries}
+        logger.debug(f"Returning from create_subqueries with keys: {list(result.keys())}")
+        print(f"create_subqueries returns: {list(result.keys())}")
+        
+        return result
     
-    def process_subqueries(state: IssueAnalyzerState) -> IssueAnalyzerState:
+    def process_subqueries(state: Dict[str, Any]) -> Dict[str, Any]:
         """Node for processing all subqueries"""
+        logger.info("CHECKPOINT: Entering process_subqueries node")
+        print("Entering process_subqueries")
+        
         subqueries = IssueAnalyzerState.get_subqueries(state)
         if not subqueries:
-            return {"error": "No subqueries available"}
+            error_msg = "No subqueries available"
+            logger.error(error_msg)
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+        
+        logger.debug(f"Retrieved {len(subqueries)} subqueries")
+        print(f"Processing {len(subqueries)} subqueries")
             
         # Sort subqueries by priority
         sorted_subqueries = sorted(subqueries, key=lambda sq: sq.priority)
         
         # Process each subquery
         search_results = []
-        for subquery in sorted_subqueries:
+        for i, subquery in enumerate(sorted_subqueries):
+            logger.debug(f"Processing subquery {i+1}/{len(sorted_subqueries)}: {subquery.query_text}")
+            print(f"Processing subquery {i+1}/{len(sorted_subqueries)}")
             result = analyzer.process_subquery(subquery)
             search_results.append(result)
-            
-        return {"search_results": search_results}
+        
+        # Debug the state we're returning
+        result = {"search_results": search_results}
+        logger.debug(f"Returning from process_subqueries with keys: {list(result.keys())}")
+        print(f"process_subqueries returns: {list(result.keys())} with {len(search_results)} results")
+        return result
     
-    def generate_solution(state: IssueAnalyzerState) -> IssueAnalyzerState:
+    def generate_solution(state: Dict[str, Any]) -> Dict[str, Any]:
         """Node for generating the final solution"""
+        logger.info("Entering generate_solution node")
+        
         issue_metadata = IssueAnalyzerState.get_issue_metadata(state)
         search_results = IssueAnalyzerState.get_search_results(state)
         
-        if not issue_metadata or not search_results:
+        if not issue_metadata:
+            logger.error("Missing issue metadata for solution generation")
             return {"error": "Missing required data for solution generation"}
             
-        solution = analyzer.generate_solution(issue_metadata, search_results)
-        return {"solution": solution}
-    
-    def format_output(state: IssueAnalyzerState) -> IssueAnalyzerState:
+        if not search_results:
+            logger.error("Missing search results for solution generation")
+            return {"error": "Missing required data for solution generation"}
+            
+        logger.debug(f"Issue metadata: {issue_metadata}")
+        logger.debug(f"Search results count: {len(search_results)}")
+        
+        try:
+            logger.info("Generating solution from analyzer")
+            solution = analyzer.generate_solution(issue_metadata, search_results)
+            logger.info("Solution generated successfully")
+            return {"solution": solution}
+        except Exception as e:
+            logger.exception(f"Error generating solution: {str(e)}")
+            return {"error": f"Exception in solution generation: {str(e)}"}
+
+    def format_output(state: Dict[str, Any]) -> Dict[str, Any]:
         """Node for formatting the final output"""
+        logger.info("Entering format_output node")
+        
         solution = IssueAnalyzerState.get_solution(state)
         if not solution:
+            logger.error("No solution available for formatting")
             return {"error": "No solution available"}
             
-        # Already in the right format, just pass it through
+        logger.debug(f"Solution to format: {solution}")
+        
+        # Return the state update
         return {"final_output": solution}
     
-    # Add nodes to the graph (using the appropriate API)
+    # Add nodes to the graph
+    logger.debug("Adding nodes to workflow")
     workflow.add_node("analyze_issue", analyze_issue)
     workflow.add_node("create_subqueries", create_subqueries)
     workflow.add_node("process_subqueries", process_subqueries)
@@ -613,57 +771,95 @@ def build_issue_solver_graph(analyzer: IssueAnalyzer) -> StateGraph:
 # ============ Application Setup ============
 
 def create_issue_solver(
-    llm_model: str = "mistral/codestral-latest",
+    llm_model: str = "codestral-latest",
     neo4j_uri: str = None,
     neo4j_username: str = None,
     neo4j_password: str = None,
     pinecone_api_key: str = None,
-    pinecone_index: str = None
+    pinecone_index: str = None,
+    log_level: int = logging.INFO
 ) -> callable:
-    """Create and return the issue solver function"""
+    """Create and return the issue solver function with configurable logging"""
+    # Setup logging
+    logger.setLevel(log_level)
+    logger.info(f"Creating issue solver with model: {llm_model}")
     
-    # Initialize the analyzer
-    analyzer = IssueAnalyzer(
-        llm_model=llm_model,
-        neo4j_uri=neo4j_uri,
-        neo4j_username=neo4j_username,
-        neo4j_password=neo4j_password,
-        pinecone_api_key=pinecone_api_key,
-        pinecone_index=pinecone_index
-    )
+    # Log config info without sensitive data
+    logger.info(f"Neo4j configured: {bool(neo4j_uri and neo4j_username)}")
+    logger.info(f"Pinecone configured: {bool(pinecone_api_key and pinecone_index)}")
     
-    # Build the workflow graph
-    workflow = build_issue_solver_graph(analyzer)
+    try:
+        # Initialize the analyzer
+        logger.info("Initializing issue analyzer")
+        analyzer = IssueAnalyzer(
+            llm_model=llm_model,
+            neo4j_uri=neo4j_uri,
+            neo4j_username=neo4j_username,
+            neo4j_password=neo4j_password,
+            pinecone_api_key=pinecone_api_key,
+            pinecone_index=pinecone_index
+        )
+        
+        # Build the workflow graph
+        logger.info("Building issue solver workflow")
+        workflow = build_issue_solver_graph(analyzer)
+        
+        # Compile the graph
+        logger.info("Compiling workflow")
+        app = workflow.compile()
+        logger.info("Workflow compiled successfully")
+        
+    except Exception as e:
+        logger.exception(f"Error during issue solver initialization: {str(e)}")
+        raise
     
-    # Compile the graph
-    app = workflow.compile()
-    
-    # Define the solver function
     def solve_issue(issue_text: str) -> SolutionOutput:
         """Solve an issue based on the provided description"""
+        issue_summary = issue_text[:100] + "..." if len(issue_text) > 100 else issue_text
+        logger.info(f"Processing new issue: {issue_summary}")
+        
         try:
-            # Run the workflow
-            result = app.invoke({"issue_text": issue_text})
+            # Run the workflow with the issue text in the initial state
+            logger.info("Invoking workflow")
+            start_time = time.time()
+            
+            initial_state = {"issue_text": issue_text}
+            logger.debug(f"Initial state keys: {list(initial_state.keys())}")
+            
+            result = app.invoke(initial_state)
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"Workflow completed in {elapsed_time:.2f} seconds")
+            logger.debug(f"Result keys: {list(result.keys())}")
             
             # Extract the solution from the final state
             if "final_output" in result:
+                logger.info("Solution generated successfully")
                 return result["final_output"]
+            elif "solution" in result:
+                logger.info("Solution found in result")
+                return result["solution"]
             elif "error" in result:
+                error_msg = f"Error in processing: {result['error']}"
+                logger.error(error_msg)
                 return SolutionOutput(
-                    summary=f"Error in processing: {result['error']}",
+                    summary=error_msg,
                     procedural_knowledge=None,
                     code_solution=None,
                     visualization_query=None
                 )
             else:
+                error_msg = "Unknown error occurred during processing"
+                logger.error(error_msg)
                 return SolutionOutput(
-                    summary="Unknown error occurred during processing",
+                    summary=error_msg,
                     procedural_knowledge=None,
                     code_solution=None,
                     visualization_query=None
                 )
+                
         except Exception as e:
-            logger.error(f"Issue solving error: {str(e)}")
+            logger.exception(f"Issue solving error: {str(e)}")
             return SolutionOutput(
                 summary=f"Exception occurred: {str(e)}",
                 procedural_knowledge=None,
@@ -674,47 +870,59 @@ def create_issue_solver(
     return solve_issue
 
 # Example usage
-# if __name__ == "__main__":
+if __name__ == "__main__":
     # Set up environment variables
-    # neo4j_uri = os.environ.get("NEO4J_URI")
-    # neo4j_username = os.environ.get("NEO4J_USERNAME")
-    # neo4j_password = os.environ.get("NEO4J_PASSWORD")
-    # pinecone_api_key = os.environ.get("PINECONE_API_KEY")
-    # pinecone_index = os.environ.get("PINECONE_INDEX")
+    neo4j_uri = os.environ.get("NEO4J_URI")
+    neo4j_username = os.environ.get("NEO4J_USERNAME")
+    neo4j_password = os.environ.get("NEO4J_PASSWORD")
+    pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+    pinecone_index = os.environ.get("PINECONE_INDEX")
     
-    # # Create the issue solver
-    # issue_solver = create_issue_solver(
-    #     neo4j_uri=neo4j_uri,
-    #     neo4j_username=neo4j_username,
-    #     neo4j_password=neo4j_password,
-    #     pinecone_api_key=pinecone_api_key,
-    #     pinecone_index=pinecone_index
-    # )
+    # Get log level from environment or default to INFO
+    log_level_name = os.environ.get("LOG_LEVEL", "INFO")
+    log_level = getattr(logging, log_level_name, logging.INFO)
     
-    # # Example issue text
-    # example_issue = """
-    # Title: API returning 500 error on pagination request
+    # Create the issue solver with logging
+    issue_solver = create_issue_solver(
+        neo4j_uri=neo4j_uri,
+        neo4j_username=neo4j_username,
+        neo4j_password=neo4j_password,
+        pinecone_api_key=pinecone_api_key,
+        pinecone_index=pinecone_index,
+        log_level=log_level
+    )
     
-    # Description:
-    # When trying to paginate through search results using the search API, it works for the first 3 pages but then returns a 500 error on page 4 and beyond.
+    # Example issue text
+    example_issue = """
+    Title: API returning 500 error on pagination request
     
-    # Steps to reproduce:
-    # 1. Call GET /api/search?q=test
-    # 2. Get the first page of results
-    # 3. Follow the "next" link 3 times
-    # 4. Try to access the 4th page
+    Description:
+    When trying to paginate through search results using the search API, it works for the first 3 pages but then returns a 500 error on page 4 and beyond.
     
-    # Expected behavior:
-    # All pages should return results with 200 OK
+    Steps to reproduce:
+    1. Call GET /api/search?q=test
+    2. Get the first page of results
+    3. Follow the "next" link 3 times
+    4. Try to access the 4th page
     
-    # Actual behavior:
-    # Pages 1-3 work fine, but page 4 returns a 500 Internal Server Error
+    Expected behavior:
+    All pages should return results with 200 OK
     
-    # Error message from logs:
-    # "RangeError: Maximum call stack size exceeded at Object.paginate (/src/utils/pagination.js:42:19)"
+    Actual behavior:
+    Pages 1-3 work fine, but page 4 returns a 500 Internal Server Error
     
-    # Environment:
-    # Production server
-    # API version: 2.3.1
-    # """
+    Error message from logs:
+    "RangeError: Maximum call stack size exceeded at Object.paginate (/src/utils/pagination.js:42:19)"
     
+    Environment:
+    Production server
+    API version: 2.3.1
+    """
+    
+    # # Solve the issue with comprehensive logging
+    # logger.info("Starting issue solving process")
+    # solution = issue_solver(example_issue)
+    # logger.info("Issue solving completed")
+    
+    # # Print the solution
+    # print(json.dumps(solution.dict(), indent=2))

@@ -3,12 +3,14 @@ from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
 from typing import Dict, Any
-from utils.query import create_issue_solver
+from utils.query import create_issue_solver, SolutionOutput
 from fastapi.middleware.cors import CORSMiddleware
-
+from utils.L_graph import getFilesContext
+from utils.pinecone_db import pinecone
 import os
 import json
 
+pinecone.create_index()
 app = FastAPI(title="Issue Solver API")
 app.add_middleware(
     CORSMiddleware,
@@ -30,10 +32,9 @@ class data(BaseModel):
 class QueryRequest(BaseModel):
     query: str
 
-# Define the response model
-class QueryResponse(BaseModel):
+class ResponseWrapper(BaseModel):
     status_code: int
-    response: Dict[str, Any]
+    response: SolutionOutput
 
 # Initialize the issue_solver at startup
 neo4j_uri = os.environ.get("NEO4J_URI")
@@ -51,28 +52,19 @@ issue_solver = create_issue_solver(
     pinecone_index=pinecone_index
 )
 
-@app.post('/chat/', response_model=QueryResponse)
+@app.post('/chat/', response_model=ResponseWrapper)
 async def chat(body: QueryRequest):
     try:
-        # Extract query from request body
         query = body.query
-        
-        # Call the issue solver with the query
         response = issue_solver(query)
-        
-        # Log the response if needed
         print(json.dumps(response.dict(), indent=2))
         
-        # Return successful response
         return {
             'status_code': 200,
             'response': response
         }
     except Exception as e:
-        # Log the error
         print(f"Error processing query: {str(e)}")
-        
-        # Raise HTTP exception
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process query: {str(e)}"
@@ -95,7 +87,7 @@ async def repo(Body: data):
         if(fullPath):
             repoName = Path(fullPath).name
             print(repoName)
-            # await getFilesContext(fullPath, repoName)
+            await getFilesContext(fullPath, repoName)
         return {
             'status_code': 200,
             'localPath': repoName,

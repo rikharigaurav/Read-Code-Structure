@@ -1,9 +1,5 @@
 from neo4j import GraphDatabase
-import logging
-from neo4j.exceptions import ServiceUnavailable
-import json
 import os
-import hashlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,43 +14,48 @@ class App:
             self.driver.verify_connectivity()
             print("connected succesfully")
 
-    def generate_node_hash(file_path: str, file_name: str) -> str:
-        """
-        Generate a unique hash ID for a node based on the file path and file name.
-
-        Parameters:
-            file_path (str): The path of the file.
-            file_name (str): The name of the file.
-
-        Returns:
-            str: A unique hash ID for the node.
-        """
-        # Combine file path and file name into a single string
-        unique_string = f"{file_path}/{file_name}"
-        
-        # Generate SHA-256 hash
-        hash_object = hashlib.sha256(unique_string.encode('utf-8'))
-        hash_id = hash_object.hexdigest()
-        
-        return hash_id
-
-    def create_data_file_node(self, file_id, file_name, file_path, file_ext):
+    def update_node_summary(self, node_id, summary):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_data_file_node, file_id, file_name, file_path, file_ext
+                self._update_node_summary, node_id, summary
             )
             return result
 
     @staticmethod
-    def _create_data_file_node(tx, file_id, file_name, file_path, file_ext):
+    def _update_node_summary(tx, node_id, summary):
+        query = (
+            "MATCH (n {id: $node_id}) "
+            "SET n.summary = $summary "
+            "RETURN n.id AS node_id, n.summary AS updated_summary"
+        )
+        result = tx.run(query, node_id=node_id, summary=summary)
+        try:
+            record = result.single()
+            if record:
+                return {"node_id": record["node_id"], "updated_summary": record["updated_summary"]}
+            else:
+                return None
+        except Exception as e:
+            print(f"Query failed: {e}")
+            return None
+
+    def create_data_file_node(self, file_id, file_name, file_path, file_ext, summary=""):
+        with self.driver.session(database="neo4j") as session:
+            result = session.write_transaction(
+                self._create_data_file_node, file_id, file_name, file_path, file_ext, summary
+            )
+            return result
+
+    @staticmethod
+    def _create_data_file_node(tx, file_id, file_name, file_path, file_ext, summary):
         query = (
             "MERGE (df:DataFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext}) "
-            "SET df.vector_id = NULL, df.summary = '' "  # Added empty summary
+            "SET df.vector_id = NULL, df.summary = $summary "  
             "RETURN df"
         )
         result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, summary=summary
         )
         try:
             record = result.single()
@@ -66,52 +67,23 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    # def create_graph_file_node(self, file_id, file_name, file_path, file_ext, file_type):
-    #     with self.driver.session(database="neo4j") as session:
-    #         result = session.write_transaction(
-    #             self._create_graph_file_node, file_id, file_name, file_path, file_ext, file_type
-    #         )
-    #         return result
-
-    # @staticmethod
-    # def _create_graph_file_node(tx, file_id, file_name, file_path, file_ext, file_type):
-    #     query = (
-    #         "MERGE (gf:GraphFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-    #         "file_ext: $file_ext, file_type: $file_type }) "
-    #         "SET gf.vector_id = NULL, gf.summary = '' "  # Added empty summary
-    #         "RETURN gf"
-    #     )
-    #     result = tx.run(
-    #         query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, file_type=file_type
-    #     )
-    #     try:
-    #         record = result.single()
-    #         if record:
-    #             return {"node_id": record["gf"]["id"], "node_type": "GraphFile"}
-    #         else:
-    #             return None
-    #     except Exception as e:
-    #         print(f"Query failed: {e}")
-    #         return None
-
-    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext):
-        # add depenpencies for future 
+    def create_template_markup_file_node(self, file_id, file_name, file_path, file_ext, summary=""):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext
+                self._create_template_markup_file_node, file_id, file_name, file_path, file_ext, summary
             )
             return result
 
     @staticmethod
-    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext):
+    def _create_template_markup_file_node(tx, file_id, file_name, file_path, file_ext, summary):
         query = (
             "MERGE (tmf:TemplateMarkupFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext}) "
-            "SET tmf.vector_id = NULL, tmf.summary = '' "  # Addad empty summary
+            "SET tmf.vector_id = NULL, tmf.summary = $summary "
             "RETURN tmf"
         )
         result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, summary=summary
         )
         try:
             record = result.single()
@@ -123,24 +95,24 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_testing_file_node(self, file_id, file_name, file_path, file_ext, test_framework, test_reference_dict):
+    def create_testing_file_node(self, file_id, file_name, file_path, file_ext,test_framework,  summary=""):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_testing_file_node, file_id, file_name, file_path, file_ext, test_framework, test_reference_dict
+                self._create_testing_file_node, file_id, file_name, file_path, file_ext, test_framework,  summary
             )
             return result
 
     @staticmethod
-    def _create_testing_file_node(tx, file_id, file_name, file_path, file_ext, test_framework, test_reference_dict):
+    def _create_testing_file_node(tx, file_id, file_name, file_path, file_ext, test_framework, summary):
         query = (
             "MERGE (tf:TestingFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
-            "file_ext: $file_ext, test_framework: $test_framework, test_reference_dict: $test_reference_dict }) "
-            "SET tf.vector_id = NULL, tf.summary = '' "  # Added empty summary
+            "file_ext: $file_ext, test_framework: $test_framework }) "
+            "SET tf.vector_id = NULL, tf.summary = $summary "  # Updated to use parameter
             "RETURN tf"
         )
         result = tx.run(
             query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext,
-            test_framework=test_framework, test_reference_dict=test_reference_dict
+            test_framework=test_framework, summary=summary
         )
         try:
             record = result.single()
@@ -152,23 +124,23 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext):
+    def create_documentation_file_node(self, file_id, file_name, file_path, file_ext, summary=""):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
-                self._create_documentation_file_node, file_id, file_name, file_path, file_ext
+                self._create_documentation_file_node, file_id, file_name, file_path, file_ext, summary
             )
             return result
 
     @staticmethod
-    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext):
+    def _create_documentation_file_node(tx, file_id, file_name, file_path, file_ext, summary):
         query = (
             "MERGE (df:DocumentationFile { id: $file_id, file_name: $file_name, file_path: $file_path, "
             "file_ext: $file_ext}) "
-            "SET df.vector_id = NULL, df.summary = '' "  
+            "SET df.vector_id = NULL, df.summary = $summary " 
             "RETURN df"
         )
         result = tx.run(
-            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext
+            query, file_id=file_id, file_name=file_name, file_path=file_path, file_ext=file_ext, summary=summary
         )
         try:
             record = result.single()
@@ -180,20 +152,22 @@ class App:
             print(f"Query failed: {e}")
             return None
         
-
-    def create_api_endpoint_node(self, nodeID, url, http_method):
+    def create_api_endpoint_node(self, nodeID, url, http_method, summary=""):
         with self.driver.session(database="neo4j") as session:
-            result = session.write_transaction(self._create_api_endpoint_node, nodeID, url, http_method)
+            result = session.write_transaction(self._create_api_endpoint_node, nodeID, url, http_method, summary)
             return result
 
     @staticmethod
-    def _create_api_endpoint_node(tx, nodeID, url, http_method):
+    def _create_api_endpoint_node(tx, nodeID, url, http_method, summary):
         query = (
-            "MERGE (ae:APIEndpoint { id: $nodeID, endpoint: $url, http_method: $http_method }) "
-            "SET ae.vector_format = NULL "
+            "MERGE (ae:APIEndpoint { id: $nodeID }) "
+            "SET ae.endpoint_name = $url,"
+            "ae.http_method = $http_method,"
+            "ae.vector_format = NULL,"
+            "ae.summary = $summary " 
             "RETURN ae"
         )
-        result = tx.run(query, nodeID=nodeID, url=url, http_method=http_method)
+        result = tx.run(query, nodeID=nodeID, url=url, http_method=http_method, summary=summary)
         try:
             record = result.single()
             if record:
@@ -204,26 +178,28 @@ class App:
             print(f"Query failed: {e}")
             return None
 
-    def create_function_node(self, function_id, function_name, file_path, return_type=""):
+    def create_function_node(self, function_id, function_name, file_path, return_type="", summary=""):
         with self.driver.session(database="neo4j") as session:
             result = session.write_transaction(
                 self._create_function_node, 
                 function_id, 
                 function_name, 
                 file_path, 
-                return_type
+                return_type,
+                summary
             )
             return result
 
     @staticmethod
-    def _create_function_node(tx, function_id, function_name, file_path, return_type):
+    def _create_function_node(tx, function_id, function_name, file_path, return_type, summary):
         
         query = (
             "MERGE (f:Function { id: $function_id }) "
             "SET f.function_name = $function_name, "
             "f.file_path = $file_path, "
             "f.vector_format = null, "
-            "f.return_type = $return_type "
+            "f.return_type = $return_type, "
+            "f.summary = $summary " 
             "RETURN f"
         )
         result = tx.run(
@@ -231,7 +207,8 @@ class App:
             function_id=function_id,
             function_name=function_name,
             file_path=file_path,
-            return_type=str(return_type)  # Ensure string type
+            return_type=str(return_type),  
+            summary=summary
         )
         try:
             record = result.single()
@@ -253,7 +230,7 @@ class App:
     def _create_folder_node(tx, folder_id, folder_name, directory_path):
         query = (
             "MERGE (f:Folder { id: $folder_id, folder_name: $folder_name, directory_path: $directory_path }) "
-            "SET f.vector_id = NULL, f.summary = '' "  # Added empty summary
+            "SET f.vector_id = NULL, f.summary = '' " 
             "RETURN f"
         )
         result = tx.run(query, folder_id=folder_id, folder_name=folder_name, directory_path=directory_path)
@@ -359,9 +336,8 @@ class App:
             return result
     @staticmethod
     def _update_vector_format(tx, node_id, vector_format, node_label):
-        # Safely interpolate the node_label into the query
         query = (
-            f"MATCH (n:{node_label} {{id: $node_id}}) "  # Dynamic label
+            f"MATCH (n:{node_label} {{id: $node_id}}) "  
             "SET n.vector_format = $vector_format "
             "RETURN n.id AS node_id, n.vector_format AS updated_vector_format"
         )
@@ -409,6 +385,34 @@ class App:
         with self.driver.session(database="neo4j") as session:
             session.run("CREATE CONSTRAINT unique_profile_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE")
             print("Constraint is set")
+
+    def run_query(self, query, parameters=None):
+        if parameters is None:
+            parameters = {}
+        
+        with self.driver.session(database="neo4j") as session:
+            result = session.run(query, parameters)
+            try:
+                records = []
+                for record in result:
+                    record_dict = {}
+                    for key in record.keys():
+                        value = record[key]
+                        # Handle Neo4j node/relationship objects
+                        if hasattr(value, '_properties'):
+                            record_dict[key] = dict(value._properties)
+                            if hasattr(value, '_labels'):
+                                record_dict[key]['_labels'] = list(value._labels)
+                        else:
+                            record_dict[key] = value
+                    records.append(record_dict)
+                print(f"Query executed successfully: {records}")
+                print(f"len {len(records)}")
+                return records
+            
+            except Exception as e:
+                print(f"Query failed: {e}")
+                return None
 
 
 app = App()

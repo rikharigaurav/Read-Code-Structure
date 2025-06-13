@@ -16,15 +16,18 @@ class pineconeOperation:
     def __init__(self, index):
         self.pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
         
-        # Cohere keys and settings
         self.cohere_keys = [
             os.getenv("COHERE_API_KEY_1"),
             os.getenv("COHERE_API_KEY_2"),
-            os.getenv("COHERE_API_KEY_3")
+            os.getenv("COHERE_API_KEY_3"),
+            os.getenv("COHERE_API_KEY_4"),
+            os.getenv("COHERE_API_KEY_5"),
+            os.getenv("COHERE_API_KEY_6"),
+            os.getenv("COHERE_API_KEY_7"),
+            os.getenv("COHERE_API_KEY_8")
         ]
         self.current_cohere_key_index = 0
         
-        # Mistral keys and settings
         self.mistral_keys = [
             os.getenv("MISTRAL_API_KEY"),
             os.getenv("MISTRAL_API_KEY"),
@@ -32,24 +35,20 @@ class pineconeOperation:
         ]
         self.current_mistral_key_index = 0
         
-        # Default to Cohere embeddings always
         self.current_embedding_type = "cohere"
         self.embeddings = self._get_cohere_embeddings()
         self.index_name = index
         
-        # Code file extensions to use Cohere for (previously used Mistral)
         self.code_extensions = ['.py', '.js', '.java', '.cpp', '.c', '.cs', '.go', '.rb', '.php', '.html', '.css', '.ts', '.sh', '.json', '.xml', '.yaml', '.yml', '.sql', '.rs', '.swift', '.kt']
 
-        # Print API key info
         self._print_api_key_info()
 
     def _print_api_key_info(self):
         """Print information about available API keys"""
-        # Check Cohere keys
+        
         valid_cohere_keys = sum(1 for key in self.cohere_keys if key and len(key) > 10)
         print(f"Found {valid_cohere_keys} potentially valid Cohere API keys")
         
-        # Check Mistral keys
         unique_mistral_keys = len(set([key for key in self.mistral_keys if key and len(key) > 10]))
         print(f"Found {unique_mistral_keys} unique potentially valid Mistral API keys")
 
@@ -64,9 +63,9 @@ class pineconeOperation:
         """Create a MistralAIEmbeddings instance with the current key"""
         return MistralAIEmbeddings(
             api_key=self.mistral_keys[self.current_mistral_key_index],
-            model="mistral-embed"  # Use standard embedding model instead of codestral
+            model="mistral-embed"  
         )
-    
+
     def _is_code_file(self, file_path):
         """Check if the file is a source code file based on extension"""
         if not file_path:
@@ -74,10 +73,10 @@ class pineconeOperation:
         
         _, ext = os.path.splitext(file_path.lower())
         return ext in self.code_extensions
-    
+
     def _select_embeddings_model(self, file_path=None):
         """Select appropriate embedding model based on file type - ALWAYS USE COHERE"""
-        # Changed to always use Cohere since Mistral is having issues
+        
         if self.current_embedding_type != "cohere":
             self.current_embedding_type = "cohere"
             self.embeddings = self._get_cohere_embeddings()
@@ -107,14 +106,12 @@ class pineconeOperation:
 
     def get_embeddings(self, text: str, file_path=None):
         """Get embeddings with automatic key rotation on failure"""
-        # Select appropriate model based on file type - always use Cohere now
         self._select_embeddings_model(file_path)
         
-        # ONLY USE COHERE SINCE MISTRAL IS FAILING
         keys_tried = 0
         while keys_tried < len(self.cohere_keys):
             try:
-                # Limit text length to prevent issues
+                
                 if len(text) > 8000:
                     print(f"Text too long ({len(text)} chars), truncating to 8000 chars")
                     text = text[:8000]
@@ -129,53 +126,69 @@ class pineconeOperation:
                     print(f"Cohere API key #{self.current_cohere_key_index + 1} exhausted. Trying next key...")
                     self._rotate_cohere_key()
                     keys_tried += 1
-                    # Add delay between requests
+                    
                     time.sleep(2)
                 else:
                     print("Error calling Cohere embeddings API:", error)
                     raise error
         
-        # If all Cohere keys are exhausted
         raise Exception("All Cohere API keys have been exhausted")
 
-    def embed_text(self, text, file_path=None, file_structure=None):
+    def embed_text(self, text, file_path=None, metadata=None):
         max_retries = 3
         retry_count = 0
         
         while retry_count < max_retries:
             try: 
-                # Sanitize and prepare text
+                
                 if len(text) < 10:
                     print(f"Warning: Very short text ({len(text)} chars)")
-                    # Pad very short text to avoid API issues
+                    
                     if len(text) < 3:
                         text = text + " " * (10 - len(text))
                 
                 embeddings = self.get_embeddings(text, file_path)
-
                 hash_id = md5(text.encode()).hexdigest()
-                metadata = {
-                    "text": self.truncate_string_by_bytes(text, 3600)
-                }
-                
-                if file_structure is not None:
-                    metadata["File_Structure"] = file_structure
-                    
-                if file_path is not None:
-                    metadata["file_path"] = file_path
-                    metadata["is_code"] = self._is_code_file(file_path)
 
+                # print(f"{len(embeddings)} embeddings generated for text of length {len(text)} chars")
+
+                # Create base record with only allowed Pinecone keys
                 record = {
                     "id": hash_id,
-                    "values": embeddings[0],    
-                    "metadata": metadata,
+                    "values": embeddings[0],
+                    "metadata": {
+                        "text": self.truncate_string_by_bytes(text, 3600)
+                    }
                 }
+                
+                # Add all metadata fields under the metadata key
+                if metadata is not None:
+                    for key, value in metadata.items():
+                        # Convert key to string
+                        str_key = str(key)
+                        
+                        # Handle different value types
+                        if isinstance(value, (dict, list, tuple)):
+                            # Convert complex types to JSON string
+                            record["metadata"][str_key] = json.dumps(value)
+                        elif isinstance(value, (str, int, float, bool)):
+                            # Keep primitive types as-is
+                            record["metadata"][str_key] = value
+                        elif value is None:
+                            # Keep None values
+                            record["metadata"][str_key] = None
+                        else:
+                            # Convert other types to string
+                            record["metadata"][str_key] = str(value)
+
+                # print(f"Metadata added to record: {record['metadata']}")
 
                 return record
+                
             except Exception as error:
                 error_str = str(error).lower()
                 if "all mistral api keys have been exhausted" in error_str or "all cohere api keys have been exhausted" in error_str:
-                    # If all keys are exhausted, propagate the error
+                    
                     print("Error embedding text: All API keys exhausted")
                     raise error
                 
@@ -184,7 +197,6 @@ class pineconeOperation:
                 if retry_count >= max_retries:
                     raise error
                 
-                # Longer delay before retry
                 time.sleep(2)
 
     def truncate_string_by_bytes(self, string, max_bytes):
@@ -193,7 +205,7 @@ class pineconeOperation:
 
     def prepare_document(self, content, chunk_size=800, chunk_overlap=50):
         try:
-            # Preserve some newlines for better context
+            
             content = re.sub(r'\n{3,}', '\n\n', content)
             splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
             docs = splitter.split_text(content)
@@ -203,7 +215,8 @@ class pineconeOperation:
             print("Error preparing document:", error)
             raise error
 
-    def load_text_to_pinecone(self, file_id, file_path=None, file_structure=None, content=None):
+    def load_text_to_pinecone(self, file_id, file_path=None, metadata=None, content=None):
+        print(f"Loading text to Pinecone with file_id: {file_id}, file_path: {file_path}, metadata: {metadata}")
         if not self.pc.has_index(self.index_name):
             self.pc.create_index(
                 name=self.index_name,
@@ -235,18 +248,17 @@ class pineconeOperation:
             texts = self.prepare_document(content)
             vectors = []
             
-            # Process each text chunk with key rotation if needed
             successful_chunks = 0
             failed_chunks = 0
             
             for i, text in enumerate(texts):
                 try:
                     print(f"Processing chunk {i+1}/{len(texts)} ({len(text)} chars)")
-                    vector = self.embed_text(text, file_path, file_structure)
+                    vector = self.embed_text(text, file_path, metadata)
                     vectors.append(vector)
                     successful_chunks += 1
                     
-                    # Add a small delay between chunks to prevent rate limiting
+                    
                     if i < len(texts) - 1:
                         time.sleep(0.5)
                         
@@ -254,17 +266,17 @@ class pineconeOperation:
                     failed_chunks += 1
                     if "All Cohere API keys have been exhausted" in str(e) or "All Mistral API keys have been exhausted" in str(e):
                         print(f"Failed to embed chunk: {e}")
-                        # If we're out of API keys, stop processing
+                        
                         break
                     print(f"Error embedding chunk {i+1}: {e}")
-                    # Continue with next chunk if possible
+                
             
             print(f"Processing complete: {successful_chunks} successful, {failed_chunks} failed chunks")
             
             if not vectors:
                 raise Exception("No vectors were successfully created")
 
-            # Upload vectors to Pinecone
+            
             print(f"Uploading {len(vectors)} vectors to Pinecone namespace: {namespace_name}")
             index = self.pc.Index(self.index_name)
             response = index.upsert(vectors=vectors, namespace=namespace_name)
@@ -276,11 +288,11 @@ class pineconeOperation:
             print("Error in load_text_to_pinecone:", error)
             raise error
 
-    def retrieve_data_from_pincone(self, context, namespace=None):
+    def retrieve_data_from_pinecone(self, context, score_threshold=0.5, metadata_filter=None, namespace=None):
         index = self.pc.Index(self.index_name)
         print(f"Context to retrieve: {context[:50]}..." if len(context) > 50 else context)
         
-        # Always use Cohere for retrieval
+        
         if self.current_embedding_type != "cohere":
             self.current_embedding_type = "cohere"
             self.embeddings = self._get_cohere_embeddings()
@@ -294,19 +306,40 @@ class pineconeOperation:
                     index=index,  
                     embedding=self.embeddings
                 )
-
                 retriever_kwargs = {
                     "search_type": "similarity_score_threshold",
-                    "search_kwargs": {"k": 3, "score_threshold": 0.1}
+                    "search_kwargs": {"k": 3,
+                                       "score_threshold": score_threshold,
+                                       }
                 }
                 
                 if namespace:
                     retriever_kwargs["search_kwargs"]["namespace"] = namespace
                 
+                if metadata_filter:
+                    retriever_kwargs["search_kwargs"]["filter"] = metadata_filter
+                
                 retriever = vector_store.as_retriever(**retriever_kwargs)
                 
                 result = retriever.invoke(context)
-                return result
+
+                # print(f"Retrieved result : {result} ")
+                
+                formatted_results = []
+                for doc in result:
+                    
+                    metadata = doc.metadata if hasattr(doc, 'metadata') else {}
+                    content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+                    
+                    formatted_doc = {
+                        'content': content,
+                        'metadata': metadata
+                    }
+                    formatted_results.append(formatted_doc)
+
+                # print(f"the retrieved data {formatted_results}")
+
+                return formatted_results
                 
             except Exception as error:
                 error_str = str(error).lower()
@@ -318,17 +351,26 @@ class pineconeOperation:
                         self._rotate_cohere_key()
                     else:
                         print(f"All Cohere keys exhausted during retrieval.")
-                        retry_count = max_retries  # Force exit loop
+                        retry_count = max_retries  
                 
                 retry_count += 1
                 if retry_count >= max_retries:
                     print(f"Failed retrieval after {max_retries} attempts: {error}")
                     raise Exception(f"Failed to retrieve data after {max_retries} attempts: {error}")
                 
-                # Longer delay before retry
                 time.sleep(2)
         
         raise Exception("Unexpected error in retrieval function")
+
+    def get_namespace_names(self):
+        if not self.pc.has_index(self.index_name):
+            print(f"Index {self.index_name} does not exist")
+            return []
+        
+        index = self.pc.Index(host="https://repository-covk0y4.svc.aped-4627-b74a.pinecone.io")
+        namespaces = index.describe_index_stats()
+        # print(namespaces['namespaces'])
+        return namespaces['namespaces']
 
     def delete_index(self):
         if self.pc.has_index(self.index_name):
@@ -351,3 +393,12 @@ class pineconeOperation:
             print("Index already exists")
 
 pinecone = pineconeOperation('repository')
+
+if __name__ == "__main__":
+    # Example usage
+    try:
+        namespace = pinecone.get_namespace_names()
+        print(f"Retrieved namespaces: {namespace}")
+
+    except Exception as e:
+        print(f"Error: {e}")

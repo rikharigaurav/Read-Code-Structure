@@ -94,7 +94,7 @@ export function CodeViewer({ file }: CodeViewerProps) {
   }
 
   return (
-    <ScrollArea className='w-full h-full'>
+    <ScrollArea className='w-screen h-screen'>
       <div className='p-2'>
         <SyntaxHighlighter
           language={getLanguageFromExtension(file)}

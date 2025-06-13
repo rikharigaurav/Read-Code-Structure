@@ -15,7 +15,8 @@ import {
 } from 'lucide-react'
 import { useState, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { useChat } from '@/hooks/use-chat'
+import { useRouter } from 'next/navigation'
+import { useChatSessions } from '@/hooks/use-chat-session'
 
 interface Issue {
   id: number
@@ -35,7 +36,16 @@ export function IssuesList({ repoURL }: { repoURL: string }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const { sendMessage: sendChatMessage, isLoading: isChatLoading } = useChat()
+
+  // Get chat session management functions from our custom hook
+  const {
+    createNewSession,
+    handleSend,
+    isLoading: isChatLoading,
+  } = useChatSessions()
+
+  // Router for navigation
+  const router = useRouter()
 
   const filteredIssues = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -92,14 +102,21 @@ export function IssuesList({ repoURL }: { repoURL: string }) {
     if (!selectedIssue || isChatLoading) return
 
     try {
-      await sendChatMessage(
-        `Analyze this issue: ${selectedIssue.title}\n\n${
-          selectedIssue.body || ''
-        }`,
-        { issue: selectedIssue }
-      )
+      const newSessionId = createNewSession()
+      const issueMessage = `
+        # ${selectedIssue.title} (#${selectedIssue.number})
+
+        ${selectedIssue.body || 'No description provided'}
+
+        ---
+        Reported by: ${selectedIssue.user.login}
+        State: ${selectedIssue.state}
+        Created: ${new Date(selectedIssue.created_at).toLocaleDateString()}
+      `
+      await handleSend(issueMessage)
     } catch (error) {
-      console.error('Failed to send issue to chatbot:', error)
+      console.error('Failed to process issue for chatbot:', error)
+      setError('Failed to send issue to chatbot')
     }
   }
 
@@ -160,7 +177,6 @@ export function IssuesList({ repoURL }: { repoURL: string }) {
           </ScrollArea>
         </Card>
 
-        {/* Right panel remains unchanged */}
         <Card className='flex-1'>
           <ScrollArea className='h-[600px]'>
             <div className='p-4'>

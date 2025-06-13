@@ -17,8 +17,6 @@ export default function Home() {
 
       setIsLoading(true)
       try {
-        // GitHub search API requires a GET request, not POST
-        // The endpoint should include the query parameter
         const response = await axios
           .post('http://127.0.0.1:8000/github/', {
             repo_url: searchQuery,

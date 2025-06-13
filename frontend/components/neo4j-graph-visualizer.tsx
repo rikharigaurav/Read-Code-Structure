@@ -1,21 +1,9 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import {
-  ClickInteraction,
-  DragNodeInteraction,
-  ZoomInteraction,
-  PanInteraction,
-} from '@neo4j-nvl/interaction-handlers'
-import * as neo4j from 'neo4j-driver'
-import type {
-  Node as Neo4jNode,
-  Relationship as Neo4jRelationship,
-  Path as Neo4jPath,
-} from 'neo4j-driver'
-import { Play } from 'lucide-react'
-import { NVL, NvlOptions } from '@neo4j-nvl/base'
-
+import { ChevronUp, ChevronDown, Play, Info } from 'lucide-react'
+import dynamic from 'next/dynamic'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,13 +17,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ChevronUp, ChevronDown } from 'lucide-react'
-import { Node as node, Relationship as relstionship } from '@neo4j-nvl/base'
+import * as neo4j from 'neo4j-driver'
+import type {
+  Node as Neo4jNode,
+  Relationship as Neo4jRelationship,
+  Path as Neo4jPath,
+} from 'neo4j-driver'
+
+const DynamicNVLComponents = dynamic(() => import('./neo4j-nvl-components'), {
+  ssr: false,
+})
 
 interface Node {
   id: string
   caption: string
   color?: string
+  properties?: Record<string, any>
+  displayName?: string
 }
 
 interface Relationship {
@@ -51,7 +49,7 @@ interface Neo4jGraphProps {
   password: string
 }
 
-// Predefined query templates
+
 const QUERY_TEMPLATES = [
   {
     label: 'Get All Relationships',
@@ -86,8 +84,17 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
   const [isLoading, setIsLoading] = useState(false)
   const [isNodesOpen, setIsNodesOpen] = useState(true)
   const [isRelationshipsOpen, setIsRelationshipsOpen] = useState(true)
-  const graphContainerRef = useRef<HTMLDivElement>(null)
-  const [nvlInstance, setNvlInstance] = useState<NVL | null>(null)
+  const [isPropertiesOpen, setIsPropertiesOpen] = useState(true)
+  const [isMounted, setIsMounted] = useState(false)
+  const [selectedNode, setSelectedNode] = useState<Node | null>(null)
+
+  // Get unique node types for the legend
+  const nodeTypes = Array.from(new Set(nodes.map((node) => node.caption)))
+
+  // Get unique relationship types for the legend
+  const relationshipTypes = Array.from(
+    new Set(relationships.map((rel) => rel.caption))
+  )
 
   const getColorForLabel = (label: string): string => {
     const colorMap: { [key: string]: string } = {
@@ -102,47 +109,101 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
     return colorMap[label] || '#CCCCCC'
   }
 
+  // Get appropriate display name based on node type and properties
+  const getNodeDisplayName = (node: Neo4jNode, nodeLabel: string): string => {
+    const properties = node.properties
+
+    switch (nodeLabel) {
+      case 'Function':
+        return properties.function_name?.toString() || nodeLabel
+      case 'ApiEndpoint':
+        return properties.endpoint?.toString() || nodeLabel
+      case 'DataFile':
+      case 'DocumentationFile':
+      case 'TemplateMarkupFile':
+        return properties.file_name?.toString() || nodeLabel
+      case 'Folder':
+        return properties.folder_name?.toString() || nodeLabel
+      default:
+        // For other types, try to find a name property
+        return properties.name?.toString() || nodeLabel
+    }
+  }
+
   const processNeo4jData = (records: neo4j.Record[]) => {
     const nodesMap = new Map<string, Node>()
     const relationshipsMap = new Map<string, Relationship>()
 
     records.forEach((record: neo4j.Record) => {
-      const path = record.get('p') as Neo4jPath
+      record.keys.forEach((key) => {
+        const value = record.get(key)
 
-      path.segments.forEach(
-        (segment: {
-          start: Neo4jNode
-          end: Neo4jNode
-          relationship: Neo4jRelationship
-        }) => {
-          // Process start node
-          const startNode = segment.start
-          const startLabel = startNode.labels[0] || 'Unknown'
-          nodesMap.set(startNode.elementId, {
-            id: startNode.elementId,
-            caption: startLabel,
-            color: getColorForLabel(startLabel),
-          })
+        if (value instanceof neo4j.types.Path) {
+          const path = value as Neo4jPath
 
-          // Process relationship
-          const relationship = segment.relationship
-          relationshipsMap.set(relationship.elementId, {
-            id: relationship.elementId,
-            from: startNode.elementId,
-            to: segment.end.elementId,
-            caption: relationship.type,
-          })
+          path.segments.forEach(
+            (segment: {
+              start: Neo4jNode
+              end: Neo4jNode
+              relationship: Neo4jRelationship
+            }) => {
+              // Process start node
+              const startNode = segment.start
+              const startLabel = startNode.labels[0] || 'Unknown'
 
-          // Process end node
-          const endNode = segment.end
-          const endLabel = endNode.labels[0] || 'Unknown'
-          nodesMap.set(endNode.elementId, {
-            id: endNode.elementId,
-            caption: endLabel,
-            color: getColorForLabel(endLabel),
+              // Get display name based on node type and available properties
+              const startDisplayName = getNodeDisplayName(startNode, startLabel)
+
+              nodesMap.set(startNode.elementId, {
+                id: startNode.elementId,
+                caption: startLabel,
+                color: getColorForLabel(startLabel),
+                properties: startNode.properties,
+                displayName: startDisplayName,
+              })
+
+              // Process relationship
+              const relationship = segment.relationship
+              relationshipsMap.set(relationship.elementId, {
+                id: relationship.elementId,
+                from: startNode.elementId,
+                to: segment.end.elementId,
+                caption: relationship.type,
+              })
+
+              // Process end node
+              const endNode = segment.end
+              const endLabel = endNode.labels[0] || 'Unknown'
+
+              // Get display name based on node type and available properties
+              const endDisplayName = getNodeDisplayName(endNode, endLabel)
+
+              nodesMap.set(endNode.elementId, {
+                id: endNode.elementId,
+                caption: endLabel,
+                color: getColorForLabel(endLabel),
+                properties: endNode.properties,
+                displayName: endDisplayName,
+              })
+            }
+          )
+        } else if (value instanceof neo4j.types.Node) {
+          // Handle direct node results
+          const node = value as Neo4jNode
+          const nodeLabel = node.labels[0] || 'Unknown'
+
+          // Get display name based on node type and available properties
+          const displayName = getNodeDisplayName(node, nodeLabel)
+
+          nodesMap.set(node.elementId, {
+            id: node.elementId,
+            caption: nodeLabel,
+            color: getColorForLabel(nodeLabel),
+            properties: node.properties,
+            displayName: displayName,
           })
         }
-      )
+      })
     })
 
     return {
@@ -154,6 +215,7 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
   const handleRunQuery = async () => {
     setIsLoading(true)
     setError(null)
+    setSelectedNode(null)
     const driver = neo4j.driver(uri, neo4j.auth.basic(user, password))
     const session = driver.session()
 
@@ -190,59 +252,16 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
     }
   }
 
-  // Get unique node types for the legend
-  const nodeTypes = Array.from(new Set(nodes.map((node) => node.caption)))
+  // Handle node click from the visualization
+  const handleNodeClick = (node: Node) => {
+    setSelectedNode(node)
+    setIsPropertiesOpen(true)
+  }
 
-  // Get unique relationship types for the legend
-  const relationshipTypes = Array.from(
-    new Set(relationships.map((rel) => rel.caption))
-  )
-
+  // Client-side only effect
   useEffect(() => {
-    if (
-      graphContainerRef.current &&
-      nodes.length > 0 &&
-      relationships.length > 0
-    ) {
-      const options: NvlOptions = {
-        layout: 'forceDirected',
-      }
-
-      const nvl = new NVL(
-        graphContainerRef.current,
-        nodes,
-        relationships,
-        options
-      )
-      setNvlInstance(nvl)
-
-      return () => {
-        nvl.destroy() 
-        setNvlInstance(null)
-      }
-    }
-  }, [nodes, relationships])
-
-  useEffect(() => {
-
-    if (!nvlInstance) return
-    const clickInteraction = new ClickInteraction(nvlInstance)
-    const panInteraction = new PanInteraction(nvlInstance)
-    const dragNodeInteraction = new DragNodeInteraction(nvlInstance)
-    const zoomInteraction = new ZoomInteraction(nvlInstance)
-
-    clickInteraction.updateCallback('onNodeClick', (node: node) => {})
-    dragNodeInteraction.updateCallback('onDrag', (nodes) => {})
-    zoomInteraction.updateCallback('onZoom', (zoomLevel) => {})
-    panInteraction.updateCallback('onPan', (panning) => {})
-
-    return () => {
-      clickInteraction.destroy()
-      dragNodeInteraction.destroy()
-      zoomInteraction.destroy()
-      panInteraction.destroy()
-    }
-  }, [nvlInstance])
+    setIsMounted(true)
+  }, [])
 
   return (
     <div className='w-full h-screen flex flex-col bg-gray-900 border-rounded-t-md'>
@@ -266,12 +285,12 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
           rows={2}
           className='flex-1 p-2 bg-gray-700 text-gray-100 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm'
           placeholder='Enter Cypher query...'
-        />
+          />
         <Button
           onClick={handleRunQuery}
           disabled={isLoading}
           className='px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center'
-        >
+          >
           {isLoading ? (
             <div className='h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin'></div>
           ) : (
@@ -281,8 +300,8 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
       </div>
       {error && (
         <div
-          className='bg-red-900/50 border border-red-700 text-red-100 px-4 py-3 m-4 rounded-md'
-          role='alert'
+        className='bg-red-900/50 border border-red-700 text-red-100 px-4 py-3 m-4 rounded-md'
+        role='alert'
         >
           <span className='block'>{error}</span>
         </div>
@@ -292,11 +311,20 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
           id='graph-container'
           className='flex-1 overflow-auto'
           style={{ height: 'calc(100vh - 200px)' }}
-          ref={graphContainerRef}
-        >
-          {nodes.length === 0 && (
+          >
+          {nodes.length === 0 ? (
             <p className='text-gray-500 italic text-center p-4'>
               Run a query to visualize the graph
+            </p>
+          ) : isMounted ? (
+            <DynamicNVLComponents
+            nodes={nodes}
+            relationships={relationships}
+            onNodeClick={handleNodeClick}
+            />
+          ) : (
+            <p className='text-gray-500 italic text-center p-4'>
+              Loading visualization...
             </p>
           )}
         </div>
@@ -371,6 +399,75 @@ export const Neo4jGraph = ({ uri, user, password }: Neo4jGraphProps) => {
                 ) : (
                   <p className='text-gray-400 text-sm italic'>
                     No relationships to display
+                  </p>
+                )}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+
+          <Collapsible
+            open={isPropertiesOpen}
+            onOpenChange={setIsPropertiesOpen}
+            className='mb-4'
+          >
+            <CollapsibleTrigger asChild>
+              <Button variant='ghost' className='w-full justify-between'>
+                <span className='flex items-center'>
+                  <Info className='h-4 w-4 mr-2' />
+                  Node Properties
+                </span>
+                {isPropertiesOpen ? (
+                  <ChevronUp className='h-4 w-4' />
+                ) : (
+                  <ChevronDown className='h-4 w-4' />
+                )}
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className='overflow-x-auto'>
+              <div className='bg-gray-700 rounded-md p-3 border border-gray-600 w-screen'>
+                {selectedNode ? (
+                  <div>
+                    <div className='flex items-center mb-2'>
+                      <div
+                        className='w-3 h-3 mr-2 rounded-full'
+                        style={{
+                          backgroundColor: selectedNode.color || '#CCCCCC',
+                        }}
+                        />
+                      <span className='text-gray-200 font-medium'>
+                        {selectedNode.displayName || selectedNode.caption}
+                      </span>
+                    </div>
+                    <div className='mt-2 text-sm text-gray-400'>
+                      Type: {selectedNode.caption}
+                    </div>
+                    <div className='mt-2'>
+                      {selectedNode.properties &&
+                      Object.keys(selectedNode.properties).length > 0 ? (
+                        <div className='grid grid-cols-1 gap-2'>
+                          {Object.entries(selectedNode.properties).map(
+                            ([key, value]) => (
+                              <div key={key} className='text-sm'>
+                                <span className='text-gray-400'>{key}:</span>{' '}
+                                <span className='text-gray-200'>
+                                  {typeof value === 'object'
+                                    ? JSON.stringify(value)
+                                    : String(value)}
+                                </span>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      ) : (
+                        <p className='text-gray-400 text-sm italic'>
+                          No properties found
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className='text-gray-400 text-sm italic'>
+                    Click on a node to view its properties
                   </p>
                 )}
               </div>

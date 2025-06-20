@@ -179,9 +179,9 @@ async def repo(Body: QueryData):
     if(repo_url):
         # print("Current repo url",repoUrl),
         # Clone this github repo to system
-        # fullPath = await clone_repository(repo_url, "./")
-        fullPath = 'task_manager.git'
-        # print("Full system path for repo", fullPath)
+        fullPath = await clone_repository(repo_url, "./")
+        # fullPath = 'task_manager.git'
+        print("Full system path for repo", fullPath)
         # Create a pinecone index
         repoName = None
         if(fullPath):

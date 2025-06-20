@@ -367,7 +367,7 @@ class pineconeOperation:
             print(f"Index {self.index_name} does not exist")
             return []
         
-        index = self.pc.Index(host="https://repository-covk0y4.svc.aped-4627-b74a.pinecone.io")
+        index = self.pc.Index(host=os.getenv("PINECONE_HOST"),)
         namespaces = index.describe_index_stats()
         # print(namespaces['namespaces'])
         return namespaces['namespaces']

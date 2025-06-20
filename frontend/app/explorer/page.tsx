@@ -1,5 +1,5 @@
 'use client'
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 import { ResizablePanelGroup, ResizablePanel } from '@/components/ui/resizable'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -24,6 +24,7 @@ interface RepoSummaryResponse {
 }
 
 export default function ExplorerPage() {
+  
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [localFilePath, setLocalFilePath] = useState<string>('')
   const [repo, setRepo] = useState<string>('')
@@ -31,13 +32,16 @@ export default function ExplorerPage() {
   const [summaryLoading, setSummaryLoading] = useState<boolean>(false)
   const [summaryError, setSummaryError] = useState<string | null>(null)
 
+  // Add this ref to track if summary has been fetched
+  const summaryFetched = useRef<string | null>(null)
+
   const searchParams = useSearchParams()
 
   useEffect(() => {
     const pathFromUrl = searchParams.get('localFilePath')
     const repoFromUrl = searchParams.get('repo')
-    console.log("local file path ")
-    console.log(localFilePath)
+
+    console.log('local file path:', pathFromUrl)
 
     if (pathFromUrl) {
       setLocalFilePath(pathFromUrl)
@@ -47,9 +51,13 @@ export default function ExplorerPage() {
     }
 
     const fetchRepoSummary = async () => {
-      console.log('Fetching summary for path:', pathFromUrl)
-      if (!pathFromUrl) return
+      // Prevent duplicate calls for the same path
+      if (!pathFromUrl || summaryFetched.current === pathFromUrl) {
+        return
+      }
 
+      console.log('Fetching summary for path:', pathFromUrl)
+      summaryFetched.current = pathFromUrl
       setSummaryLoading(true)
       setSummaryError(null)
 
@@ -68,6 +76,8 @@ export default function ExplorerPage() {
         }
       } catch (error) {
         console.error('Error fetching repository summary:', error)
+        // Reset the ref on error so retry is possible
+        summaryFetched.current = null
 
         let errorMessage = 'An unexpected error occurred'
 

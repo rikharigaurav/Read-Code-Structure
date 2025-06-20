@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from utils.cloneRepo import clone_repository
 from pathlib import Path
+import asyncio
 from typing import Dict, Any, Optional, List
 from utils.query import create_issue_solver, SolutionOutput
 from fastapi.middleware.cors import CORSMiddleware
@@ -187,14 +188,20 @@ async def repo(Body: QueryData):
             repoName = Path(fullPath).name
             print(repoName)
             # await getFilesContext(fullPath, repoName)
+        
+        # Add 10 second sleep before returning
+        await asyncio.sleep(10)
+        
         return {
             'status_code': 200,
             'localPath': repoName,
         }
 
     else:
+        # Add 10 second sleep before returning error response too
+        await asyncio.sleep(10)
         return {"repoUrl": "No repo url provided"}
-
+    
 @app.get("/directory")
 async def get_directory(path: str = None):
     try:

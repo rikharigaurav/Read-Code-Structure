@@ -177,20 +177,17 @@ async def repo(Body: QueryData):
     print(repo_url)
 
     if(repo_url):
-        # print("Current repo url",repoUrl),
-        # Clone this github repo to system
         fullPath = await clone_repository(repo_url, "./")
-        # fullPath = 'task_manager.git'
         print("Full system path for repo", fullPath)
         # Create a pinecone index
         repoName = None
         if(fullPath):
             repoName = Path(fullPath).name
             print(repoName)
-            # await getFilesContext(fullPath, repoName)
+            await getFilesContext(fullPath, repoName)
         
         # Add 10 second sleep before returning
-        await asyncio.sleep(10)
+        # await asyncio.sleep(10)
         
         return {
             'status_code': 200,

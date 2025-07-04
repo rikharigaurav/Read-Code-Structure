@@ -181,7 +181,8 @@ async def repo(Body: QueryData):
         print("Full system path for repo", fullPath)
         # Create a pinecone index
         repoName = None
-        # if(fullPath):
+        if(fullPath):
+            print("repository cloned successfully")
         #     repoName = Path(fullPath).name
         #     print(repoName)
             # await getFilesContext(fullPath, repoName)

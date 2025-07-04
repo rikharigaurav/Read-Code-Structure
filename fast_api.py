@@ -181,13 +181,13 @@ async def repo(Body: QueryData):
         print("Full system path for repo", fullPath)
         # Create a pinecone index
         repoName = None
-        if(fullPath):
-            repoName = Path(fullPath).name
-            print(repoName)
-            await getFilesContext(fullPath, repoName)
+        # if(fullPath):
+        #     repoName = Path(fullPath).name
+        #     print(repoName)
+            # await getFilesContext(fullPath, repoName)
         
         # Add 10 second sleep before returning
-        # await asyncio.sleep(10)
+        await asyncio.sleep(10)
         
         return {
             'status_code': 200,

@@ -40,7 +40,7 @@ export function useChat(): UseChatResult {
     setError(null)
 
     try {
-      const result = await axios.post('http://127.0.0.1:8000/chat/', {
+      const result = await axios.post('/api/chat/', {
         query: query,
         context: context || {},
       })

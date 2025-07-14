@@ -63,7 +63,7 @@ export default function ExplorerPage() {
 
       try {
         const response = await axios.post<RepoSummaryResponse>(
-          'http://localhost:8000/summarize-folder/',
+          '/api/summarize-folder/',
           {
             localRepoPath: pathFromUrl,
           }

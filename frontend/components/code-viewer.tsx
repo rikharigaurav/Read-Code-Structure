@@ -28,7 +28,7 @@ export function CodeViewer({ file }: CodeViewerProps) {
         setLoading(true)
         // Fetch file content from backend
         const response = await axios.get(
-          `http://localhost:8000/file?path=${encodeURIComponent(file)}`
+          `/api/file?path=${encodeURIComponent(file)}`
         )
         // Set the file content
         setContent(response.data)

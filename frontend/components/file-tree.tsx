@@ -25,9 +25,7 @@ export function FileTree({ rootPath, onSelect }: FileTreeProps) {
   const fetchDirectory = async (path: string) => {
     try {
       const response = await axios.get(
-        `http://localhost:8000/directory?path=${encodeURIComponent(
-          path
-        )}`
+        `/api/directory?path=${encodeURIComponent(path)}`
       )
 
       return response.data

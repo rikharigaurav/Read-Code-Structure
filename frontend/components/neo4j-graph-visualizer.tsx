@@ -45,12 +45,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import React from 'react'
 import type { VisGraphCanvasHandle } from './vis-graph-canvas'
 
-// Dynamically load vis-network canvas (no SSR)
-const VisGraphCanvas = dynamic(() => import('./vis-graph-canvas'), { ssr: false })
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Shared types ─────────────────────────────────────────────────────────────
 interface NodeData {
   id: string
   caption: string
@@ -65,6 +63,24 @@ interface EdgeData {
   to: string
   caption: string
 }
+
+interface VisGraphCanvasProps {
+  nodes: NodeData[]
+  relationships: EdgeData[]
+  onNodeClick?: (node: NodeData | null) => void
+  onStabilized?: () => void
+  physicsEnabled?: boolean
+  layout?: 'forceDirected' | 'hierarchical'
+}
+
+// Dynamically load vis-network canvas (no SSR).
+// Cast restores the forwardRef typing that next/dynamic erases.
+const VisGraphCanvas = dynamic(
+  () => import('./vis-graph-canvas'),
+  { ssr: false }
+) as React.ForwardRefExoticComponent<
+  VisGraphCanvasProps & React.RefAttributes<VisGraphCanvasHandle>
+>
 
 interface Neo4jGraphProps {
   uri: string

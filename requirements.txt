@@ -5,7 +5,7 @@ python-git
 requests
 uvicorn
 pydantic
-langchain-pinecone 
+langchain-pinecone
 pinecone-notebooks
 langchain-neo4j
 langgraph-checkpoint-sqlite
@@ -20,3 +20,6 @@ langchain-community
 tree-sitter
 tree-sitter-python
 langgraph
+# MCP server
+mcp[cli]
+httpx
